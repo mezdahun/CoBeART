@@ -22,7 +22,7 @@ setup(
             'pytest',
             'pytest-cov'
         ],
-        'cobeart-master': [
+        'cobeart': [
             'opencv-python==4.7.0.72',
             'matplotlib',
             'scipy',
@@ -30,7 +30,8 @@ setup(
             'psutil',
             'fabric',
             'tinyflux',
-            'filterpy'
+            'filterpy',
+            'python-socketio[client]'
         ]
     },
     entry_points={

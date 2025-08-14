@@ -24,6 +24,7 @@ import time
 from scipy.spatial.transform import Rotation
 
 import cobeart.settings.streaming as otsettings
+from cobeart.packagesender import sender
 
 from cobeart.optitrackclient.NatNetClient import NatNetClient
 import cobeart.optitrackclient.DataDescriptions as DataDescriptions
@@ -50,11 +51,13 @@ def generate_output(obj_positions):
                 "pitch": float(pitch)  # [degrees]
             })
 
-    return output_list
+    payload = {
+        "type": "optitrack",
+        "timestamp": time.time(),
+        "rigidbodies": output_list
+    }
 
-
-def send_output(output_list):
-    pass
+    sender.send_payload(payload, framerate=otsettings.package_framerate)
 
 
 # This is a callback function that gets connected to the NatNet client
