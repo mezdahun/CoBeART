@@ -1,0 +1,20 @@
+{
+  "name": "cobeart-app",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently -k -n WEB,ELECTRON \"node server.js\" \"electron .\"",
+    "web": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "concurrently": "^8.2.2"
+  }
+}

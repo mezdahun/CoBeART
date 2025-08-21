@@ -56,19 +56,21 @@ googleLink.addEventListener('click', e => {
 const canvas = document.getElementsByTagName('canvas')[0];
 resizeCanvas();
 
+//Main parameters of the fluid simulation
 let config = {
-    SIM_RESOLUTION: 128,
-    DYE_RESOLUTION: 1024,
+    SIM_RESOLUTION: 256,
+    DYE_RESOLUTION: 2048,
     CAPTURE_RESOLUTION: 512,
-    DENSITY_DISSIPATION: 1,
-    VELOCITY_DISSIPATION: 0.2,
+    DENSITY_DISSIPATION: 2.5,
+    VELOCITY_DISSIPATION: 0.8,
     PRESSURE: 0.8,
-    PRESSURE_ITERATIONS: 20,
-    CURL: 30,
-    SPLAT_RADIUS: 0.25,
+    PRESSURE_ITERATIONS: 30,
+    //CURL is vorticity
+    CURL: 5,
+    SPLAT_RADIUS: 0.35,
     SPLAT_FORCE: 6000,
     SHADING: true,
-    COLORFUL: true,
+    COLORFUL: false,
     COLOR_UPDATE_SPEED: 10,
     PAUSED: false,
     BACK_COLOR: { r: 0, g: 0, b: 0 },
@@ -76,14 +78,15 @@ let config = {
     BLOOM: true,
     BLOOM_ITERATIONS: 8,
     BLOOM_RESOLUTION: 256,
-    BLOOM_INTENSITY: 0.8,
-    BLOOM_THRESHOLD: 0.6,
+    BLOOM_INTENSITY: 1.25,
+    BLOOM_THRESHOLD: 1,
     BLOOM_SOFT_KNEE: 0.7,
     SUNRAYS: true,
     SUNRAYS_RESOLUTION: 196,
     SUNRAYS_WEIGHT: 1.0,
 }
 
+// Definition of single pointer in canvas
 function pointerPrototype () {
     this.id = -1;
     this.texcoordX = 0;
@@ -96,11 +99,12 @@ function pointerPrototype () {
     this.moved = false;
     this.color = [30, 0, 300];
 }
-
+// Global pointer holders to push new pointers later
 let pointers = [];
 let splatStack = [];
 pointers.push(new pointerPrototype());
 
+// Importing WebGL API package related stuff
 const { gl, ext } = getWebGLContext(canvas);
 
 if (isMobile()) {
@@ -205,6 +209,7 @@ function supportRenderTextureFormat (gl, internalFormat, format, type) {
     return status == gl.FRAMEBUFFER_COMPLETE;
 }
 
+// Todo: get rid of or hide GUI for production
 function startGUI () {
     var gui = new dat.GUI({ width: 300 });
     gui.add(config, 'DYE_RESOLUTION', { 'high': 1024, 'medium': 512, 'low': 256, 'very low': 128 }).name('quality').onFinishChange(initFramebuffers);
@@ -276,6 +281,9 @@ function startGUI () {
     app.domElement.parentElement.appendChild(appIcon);
     appIcon.className = 'icon app';
 
+    // closing gui as default
+    gui.close();
+
     if (isMobile())
         gui.close();
 }
@@ -298,6 +306,7 @@ function captureScreenshot () {
     URL.revokeObjectURL(datauri);
 }
 
+// Fetching current state of WebGL frame buffer into a pixel array (texture)
 function framebufferToTexture (target) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
     let length = target.width * target.height * 4;
@@ -306,6 +315,7 @@ function framebufferToTexture (target) {
     return texture;
 }
 
+// Scale texture pixel values between 0 and 255
 function normalizeTexture (texture, width, height) {
     let result = new Uint8Array(texture.length);
     let id = 0;
@@ -326,6 +336,7 @@ function clamp01 (input) {
     return Math.min(Math.max(input, 0), 1);
 }
 
+// Pushing extracted texture to canvas
 function textureToCanvas (texture, width, height) {
     let captureCanvas = document.createElement('canvas');
     let ctx = captureCanvas.getContext('2d');
@@ -959,6 +970,7 @@ let sunraysTemp;
 
 let ditheringTexture = createTextureAsync('LDR_LLL1_0.png');
 
+// Creating programs from base vertex shader with combination of fragment shaders
 const blurProgram            = new Program(blurVertexShader, blurShader);
 const copyProgram            = new Program(baseVertexShader, copyShader);
 const clearProgram           = new Program(baseVertexShader, clearShader);
@@ -1204,6 +1216,7 @@ function resizeCanvas () {
     return false;
 }
 
+//todo: modify such that we change color according to movement
 function updateColors (dt) {
     if (!config.COLORFUL) return;
 
@@ -1229,6 +1242,9 @@ function applyInputs () {
 }
 
 function step (dt) {
+
+    //todo: add calculation of different config parameters according to received splat parameters
+
     gl.disable(gl.BLEND);
 
     curlProgram.bind();
