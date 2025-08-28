@@ -27,7 +27,7 @@ use_optitrack_client = True
 use_multicast = True
 
 # tracking framerate in Hz
-tracking_framerate = 55  # the framerate at which tracking data is received from OptiTrack
+tracking_framerate = 240  # the framerate at which tracking data is received from OptiTrack
 
 # framerate at which packages are sent, should be slightly higher than tracking framrate
-package_framerate = 60  # the framerate at which packages are sent to the rendering system
+package_framerate = 240  # the framerate at which packages are sent to the rendering system

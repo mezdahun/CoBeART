@@ -1,41 +1,58 @@
 (function () {
   function init() {
-    // 1) Ensure the iframe exists
     let frameEl = document.getElementById('fluidFrame');
-    console.warn('[fluid-bridge] init: looking for iframe', frameEl);
     if (!frameEl) {
-    //  raising error
-        console.error('[fluid-bridge] ERROR: no iframe found with id="fluidFrame"');
-        return;
+      frameEl = document.createElement('iframe');
+      frameEl.id = 'fluidFrame';
+      frameEl.src = '/fluid/index.html';
+      frameEl.width = 960;
+      frameEl.height = 540;
+      frameEl.style.border = '0';
+      frameEl.style.maxWidth = '100%';
+      const host = document.getElementById('out')?.parentElement || document.body;
+      host.appendChild(document.createElement('h2')).textContent = 'Fluid Simulation';
+      host.appendChild(frameEl);
     }
 
-    // 2) Use the same viewer socket if already created one (attach it to window!).
-    // In index.html make sure to do:  window.viewerSocket = io('/viewer', { transports: ['websocket'] });
     const socket = window.viewerSocket || io('/viewer', { transports: ['websocket'] });
 
     socket.on('connect', () => console.log('[fluid-bridge] socket connected', socket.id));
     socket.on('disconnect', () => console.log('[fluid-bridge] socket disconnected'));
 
-    // 6) Receive frames from server and forward as splats
+    let fluidReady = true;
+    const outbox = [];
+    function flush() {
+      while (outbox.length) frameEl.contentWindow.postMessage(outbox.shift(), '*');
+    }
+    function postToFluid(msg) {
+      if (fluidReady) frameEl.contentWindow.postMessage(msg, '*');
+      else outbox.push(msg);
+    }
+
+    let latestFrame = null; // Store the latest frame
+    const bridgeFramerate = 240; // Target bridge framerate in Hz
+
+    // Timer to send the latest frame at the bridge framerate
+    setInterval(() => {
+      if (latestFrame) {
+        const list = Array.isArray(latestFrame.rigidbodies) ? latestFrame.rigidbodies : [];
+        for (const rb of list) {
+          const id = Number(rb.ID ?? rb.id ?? 0);
+          const x = rb.x || 0;
+          const y = rb.y || 0;
+          const color = [1, 0.6, 0.2];
+          postToFluid({ type: 'splat', id, x, y, color });
+          console.log('[fluid-bridge] sent splat', { id, x, y });
+        }
+        latestFrame = null; // Clear the frame after sending
+      }
+    }, 1000 / bridgeFramerate);
+
+    // Receive frames from the server and store the latest one
     socket.on('frame', (payload) => {
-      // Optional: basic validation
-      console.debug('[fluid-bridge] received frame:', payload);
-
-      // fetching raw data of rigid bodies
-      const list = Array.isArray(payload.rigidbodies) ? payload.rigidbodies : [];
-      for (const rb of list) {
-        const id = Number(rb.ID ?? rb.id ?? 1);
-
-        // extract position
-        const x = rb.x || 0;
-        const y = rb.y || 0;
-
-        // Todo: calculate all derived metrics here and forward to visualizer
-        // add splash color
-        const color = [1, 0.6, 0.2];
-
-        // post to fluid visualizer
-        postToFluid({ type: 'splat', id, x: x, y: y, color });
+      if (payload) {
+        console.log('[fluid-bridge] received frame', payload);
+        latestFrame = payload; // Overwrite with the latest frame
       }
     });
   }

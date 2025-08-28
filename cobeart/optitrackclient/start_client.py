@@ -32,32 +32,13 @@ import cobeart.optitrackclient.MoCapData as MoCapData
 
 # global variable to store and update the tracked rigid bodies
 rigid_bodies = {}
+payload_sender = sender.PayloadSender(framerate=otsettings.package_framerate)
 
 
 def generate_output(obj_positions):
     """Generating json with positions."""
-
-    output_list = []
-    for triplet in obj_positions:
-        id, x, y, z, roll, yaw, pitch = triplet
-        if id < otsettings.max_num_objects:
-            output_list.append({
-                "ID": id,
-                "x": int(x),  # [mm]
-                "y": int(y),  # [mm]
-                "z": int(z),  # [mm]
-                "roll": float(roll),  # [degrees]
-                "yaw": float(yaw),  # [degrees]
-                "pitch": float(pitch)  # [degrees]
-            })
-
-    payload = {
-        "type": "optitrack",
-        "timestamp": time.time(),
-        "rigidbodies": output_list
-    }
-
-    sender.send_payload(payload, framerate=otsettings.package_framerate)
+    global payload_sender
+    payload_sender.send_payload(obj_positions)
 
 
 # This is a callback function that gets connected to the NatNet client

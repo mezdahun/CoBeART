@@ -59,15 +59,15 @@ resizeCanvas();
 //Main parameters of the fluid simulation
 let config = {
     SIM_RESOLUTION: 256,
-    DYE_RESOLUTION: 2048,
+    DYE_RESOLUTION: 1024,
     CAPTURE_RESOLUTION: 512,
-    DENSITY_DISSIPATION: 2.5,
-    VELOCITY_DISSIPATION: 0.8,
+    DENSITY_DISSIPATION: 3.5,
+    VELOCITY_DISSIPATION: 2,
     PRESSURE: 0.8,
     PRESSURE_ITERATIONS: 30,
     //CURL is vorticity
     CURL: 5,
-    SPLAT_RADIUS: 0.35,
+    SPLAT_RADIUS: 0.2,
     SPLAT_FORCE: 6000,
     SHADING: true,
     COLORFUL: false,
@@ -78,12 +78,12 @@ let config = {
     BLOOM: true,
     BLOOM_ITERATIONS: 8,
     BLOOM_RESOLUTION: 256,
-    BLOOM_INTENSITY: 1.25,
+    BLOOM_INTENSITY: 0.2,
     BLOOM_THRESHOLD: 1,
     BLOOM_SOFT_KNEE: 0.7,
     SUNRAYS: true,
     SUNRAYS_RESOLUTION: 196,
-    SUNRAYS_WEIGHT: 1.0,
+    SUNRAYS_WEIGHT: 0.5,
 }
 
 // Definition of single pointer in canvas
