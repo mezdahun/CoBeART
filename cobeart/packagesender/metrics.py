@@ -1,6 +1,9 @@
 import numpy as np
 import time
 
+# we need continuity in the normal velocity calculation, so we need a consistent 5 timestep in which it was zero to pass zero, otherwise we do not change the value
+normVel_hist = [1 for i in range(15)]
+
 body_history = {}
 body_template = {
     'id': -1,
@@ -17,7 +20,7 @@ def clac_vel_from_euler_components(vx, vy):
     return np.linalg.norm([vx, vy])
 
 
-def normalize_abs_velocity(abs_vel, max_vel=6000):
+def normalize_abs_velocity(abs_vel, max_vel=10000):
     """Normalizes absolute velocity to a 0-1 range based on a maximum expected velocity"""
     return min(abs_vel / max_vel, 1.0)
 
@@ -59,5 +62,14 @@ def calculate_metrics(id, x, y, z, roll, yaw, pitch):
     body_history[id]['timestamp'] = current_time
     body_history[id]['abs_velocity'] = clac_vel_from_euler_components(velocity[0], velocity[1])
     body_history[id]['norm_abs_velocity'] = normalize_abs_velocity(body_history[id]['abs_velocity'])
+
+    # changing history
+    normVel_hist.append(body_history[id]['norm_abs_velocity'])
+    normVel_hist.pop(0)
+    if all(v == 0 for v in normVel_hist):
+        body_history[id]['norm_abs_velocity'] = 0.0
+    else:
+        body_history[id]['norm_abs_velocity'] = max(normVel_hist)
+
     print(f"DEBUG metrics for ID {id}: {body_history[id]}")
     return body_history[id]

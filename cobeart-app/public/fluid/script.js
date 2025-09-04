@@ -1185,13 +1185,29 @@ let lastUpdateTime = Date.now();
 let colorUpdateTimer = 0.0;
 // Latest observed velocity magnitudes from incoming messages
 let latestNormVel = 0;
+let latestZ = {};
 // Latest observed angular velocities from incoming messages
 let latestAngVel = { vroll: 0, vpitch: 0, vyaw: 0 };
+
+function computeVelocityDissipation(zdict){
+    // TODO: modify other global variables to have IDs for multiple tracked opbjects
+    const posz = zdict[1]
+    // zpos between 0 and 1000
+    console.log("z coord: ", posz);
+    var z = typeof posz === 'number' ? posz : 0;
+    z = Math.max(0, Math.min(z, 2000)) / 2000;
+    // higher the z lower the dissipation (between 1 and 4)
+    const mindiss = 1.0;
+    const maxdiss = 4.0;
+    const diss = maxdiss - z * (maxdiss - mindiss);
+    console.log("dissipation: ", z, diss);
+    return diss;
+}
 
 function computeSplatRadius(normVel) {
     // Map normVel -> splat radius using e^(2*normVel - 2.5) + 0.1
     const v = typeof normVel === 'number' ? normVel : 0;
-    return Math.exp(2 * v - 2.5) + 0.1;
+    return Math.max(0, Math.min(v, 0.8)) / 1.5;
 }
 
 function computeCurl(vroll, vpitch, vyaw) {
@@ -1214,6 +1230,9 @@ function update() {
     updateColors(dt);
     // Update splat radius and curl based on latest incoming velocities before applying inputs
     config.SPLAT_RADIUS = computeSplatRadius(latestNormVel);
+    console.log("splat radius: ", config.SPLAT_RADIUS);
+    config.VELOCITY_DISSIPATION = computeVelocityDissipation(latestZ);
+    console.log("velocity dissipation: ", config.VELOCITY_DISSIPATION);
     config.CURL = computeCurl(latestAngVel.vroll, latestAngVel.vpitch, latestAngVel.vyaw);
     applyInputs();
     if (!config.PAUSED)
@@ -1595,6 +1614,7 @@ window.addEventListener('keydown', e => {
         latestAngVel.vyaw = typeof m.vyaw === 'number' ? m.vyaw : 0;
 
         latestNormVel = m.normVel
+        latestZ[m.id] = m.z
 
         // Incoming coords are [0..1]. Convert to CSS px, then to device px using scaleByPixelRatio
         const arena_x = 3000; // Assuming a fixed arena size of 3000x3000
