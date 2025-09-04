@@ -1,6 +1,7 @@
 import time
 import socketio  # pip install "python-socketio[client]"
 import cobeart.settings.streaming as otsettings
+from cobeart.packagesender.metrics import calculate_metrics
 
 SIO_URL = "http://localhost:3000"
 sio = socketio.Client(reconnection=True, reconnection_attempts=0)
@@ -39,6 +40,7 @@ class PayloadSender:
                 output_list = []
                 for triplet in obj_positions:
                     id, x, y, z, roll, yaw, pitch = triplet
+                    deducted_metrics = calculate_metrics(id, x, y, z, roll, yaw, pitch)
                     if id < otsettings.max_num_objects:
                         output_list.append({
                             "ID": id,
@@ -47,7 +49,13 @@ class PayloadSender:
                             "z": int(z),  # [mm]
                             "roll": float(roll),  # [degrees]
                             "yaw": float(yaw),  # [degrees]
-                            "pitch": float(pitch)  # [degrees]
+                            "pitch": float(pitch),  # [degrees]
+                            "vx": float(deducted_metrics['velocity'][0]),  # [mm/s]
+                            "vy": float(deducted_metrics['velocity'][1]),  # [mm/s]
+                            "vz": float(deducted_metrics['velocity'][2]),  # [mm/s]
+                            "vroll": float(deducted_metrics['angular_velocity'][0]),  # [degrees/s]
+                            "vyaw": float(deducted_metrics['angular_velocity'][1]),  # [degrees/s]
+                            "vpitch": float(deducted_metrics['angular_velocity'][2])  # [degrees/s]
                         })
 
                 payload = {
