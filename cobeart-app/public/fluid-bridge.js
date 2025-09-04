@@ -90,7 +90,6 @@ Angular Velocity: (vroll: ${vroll.toFixed(2)}, vpitch: ${vpitch.toFixed(2)}, vya
         }
         console.log('[fluid-bridge] updating overlay', overlayText);
         overlay.innerHTML = overlayText; // Update the overlay text
-        latestFrame = null; // Clear the frame after sending
       }
     };
 
