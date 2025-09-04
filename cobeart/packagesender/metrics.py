@@ -12,6 +12,16 @@ body_template = {
 }
 
 
+def clac_vel_from_euler_components(vx, vy):
+    """Calculates overall absolute velocity from x and y vector components"""
+    return np.linalg.norm([vx, vy])
+
+
+def normalize_abs_velocity(abs_vel, max_vel=6000):
+    """Normalizes absolute velocity to a 0-1 range based on a maximum expected velocity"""
+    return min(abs_vel / max_vel, 1.0)
+
+
 def calculate_metrics(id, x, y, z, roll, yaw, pitch):
     global body_history
     current_time = time.time()
@@ -27,6 +37,8 @@ def calculate_metrics(id, x, y, z, roll, yaw, pitch):
         body_history[id]['timestamp'] = current_time
         body_history[id]['velocity'] = np.array([0.0, 0.0, 0.0])
         body_history[id]['angular_velocity'] = np.array([0.0, 0.0, 0.0])
+        body_history[id]['abs_velocity'] = 0.0
+        body_history[id]['norm_abs_velocity'] = 0.0
         return body_history[id]
 
     # Existing body, calculate velocities according to time difference
@@ -45,5 +57,7 @@ def calculate_metrics(id, x, y, z, roll, yaw, pitch):
     body_history[id]['velocity'] = velocity
     body_history[id]['angular_velocity'] = angular_velocity
     body_history[id]['timestamp'] = current_time
-
+    body_history[id]['abs_velocity'] = clac_vel_from_euler_components(velocity[0], velocity[1])
+    body_history[id]['norm_abs_velocity'] = normalize_abs_velocity(body_history[id]['abs_velocity'])
+    print(f"DEBUG metrics for ID {id}: {body_history[id]}")
     return body_history[id]

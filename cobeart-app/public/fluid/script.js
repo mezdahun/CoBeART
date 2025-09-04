@@ -1185,6 +1185,7 @@ let lastUpdateTime = Date.now();
 let colorUpdateTimer = 0.0;
 // Latest observed linear velocities from incoming messages
 let latestVel = { vx: 0, vy: 0, vz: 0 };
+let latestNormVel = 0;
 // Latest observed angular velocities from incoming messages
 let latestAngVel = { vroll: 0, vpitch: 0, vyaw: 0 };
 
@@ -1195,7 +1196,7 @@ function computeSplatRadius(vx, vy, vz) {
     const sy = typeof vy === 'number' ? vy : 0;
     const sz = typeof vz === 'number' ? vz : 0;
     const speed = Math.sqrt(sx * sx + sy * sy + sz * sz);
-    const normalized = Math.max(0, Math.min(1, speed / 100));
+    const normalized = Math.max(0, Math.min(1, speed) / 8);
     return 0.01 + normalized * (1.0 - 0.01);
 }
 
@@ -1218,7 +1219,7 @@ function update() {
         initFramebuffers();
     updateColors(dt);
     // Update splat radius and curl based on latest incoming velocities before applying inputs
-    config.SPLAT_RADIUS = computeSplatRadius(latestVel.vx, latestVel.vy, latestVel.vz);
+    config.SPLAT_RADIUS = 0.05 + latestNormVel/10; //computeSplatRadius(latestVel.vx, latestVel.vy, latestVel.vz);
     config.CURL = computeCurl(latestAngVel.vroll, latestAngVel.vpitch, latestAngVel.vyaw);
     applyInputs();
     if (!config.PAUSED)
@@ -1601,6 +1602,8 @@ window.addEventListener('keydown', e => {
         latestAngVel.vroll = typeof m.vroll === 'number' ? m.vroll : 0;
         latestAngVel.vpitch = typeof m.vpitch === 'number' ? m.vpitch : 0;
         latestAngVel.vyaw = typeof m.vyaw === 'number' ? m.vyaw : 0;
+
+        latestNormVel = m.normVel
 
         // Incoming coords are [0..1]. Convert to CSS px, then to device px using scaleByPixelRatio
         const arena_x = 3000; // Assuming a fixed arena size of 3000x3000

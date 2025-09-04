@@ -55,7 +55,9 @@ class PayloadSender:
                             "vz": float(deducted_metrics['velocity'][2]),  # [mm/s]
                             "vroll": float(deducted_metrics['angular_velocity'][0]),  # [degrees/s]
                             "vyaw": float(deducted_metrics['angular_velocity'][1]),  # [degrees/s]
-                            "vpitch": float(deducted_metrics['angular_velocity'][2])  # [degrees/s]
+                            "vpitch": float(deducted_metrics['angular_velocity'][2]),  # [degrees/s]
+                            "abs_vel": float(deducted_metrics['abs_velocity']),  # [mm/s]
+                            "norm_abs_vel": float(deducted_metrics['norm_abs_velocity'])  # [0..1]
                         })
 
                 payload = {

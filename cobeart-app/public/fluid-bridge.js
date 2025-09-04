@@ -81,10 +81,13 @@
           const vroll = rb.vroll || 0;
           const vpitch = rb.vpitch || 0;
           const vyaw = rb.vyaw || 0;
+          const absVel = rb.abs_vel || 0;
+          const normVel = rb.norm_abs_vel || 0;
 
           overlayText += `Splat ID: ${id}<br>
 Position: (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})<br>
 Velocity: (${vx.toFixed(2)}, ${vy.toFixed(2)}, ${vz.toFixed(2)})<br>
+|V|: ${absVel.toFixed(2)} (norm: ${normVel.toFixed(2)})<br>
 Rotation: (roll: ${roll.toFixed(2)}, pitch: ${pitch.toFixed(2)}, yaw: ${yaw.toFixed(2)})<br>
 Angular Velocity: (vroll: ${vroll.toFixed(2)}, vpitch: ${vpitch.toFixed(2)}, vyaw: ${vyaw.toFixed(2)})<br><br>`;
         }
@@ -98,6 +101,7 @@ Angular Velocity: (vroll: ${vroll.toFixed(2)}, vpitch: ${vpitch.toFixed(2)}, vya
     setInterval(() => {
       if (latestFrame) {
         const list = Array.isArray(latestFrame.rigidbodies) ? latestFrame.rigidbodies : [];
+        console.log('DEBUG: preparing to send splats', list);
         for (const rb of list) {
           const id = Number(rb.ID ?? rb.id ?? 0);
           const x = rb.x || 0;
@@ -113,7 +117,10 @@ Angular Velocity: (vroll: ${vroll.toFixed(2)}, vpitch: ${vpitch.toFixed(2)}, vya
           const vpitch = rb.vpitch || 0;
           const vyaw = rb.vyaw || 0;
           const color = [1, 0.6, 0.2];
-          postToFluid({ type: 'splat', id, x, y, z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw, color });
+          const absVel = rb.abs_vel;
+          const normVel = rb.norm_abs_vel;
+          postToFluid({ type: 'splat', id, x, y, z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw, absVel, normVel, color });
+          console.log('DEBUG: sent splat', absVel, normVel);
 //          const consoleMessage = `[fluid-bridge] sent splat id:${id} pos:(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) vel:(${vx.toFixed(2)}, ${vy.toFixed(2)}, ${vz.toFixed(2)})`;
 //          console.log('[fluid-bridge] sent splat', { id, x, y , z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw });
         }
