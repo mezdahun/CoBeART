@@ -28,7 +28,7 @@
       overlay.style.height = `${frameEl.offsetHeight}px`;
       overlay.style.pointerEvents = 'none';
       overlay.style.color = 'white';
-      overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+      overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.0)';
       overlay.style.fontFamily = 'monospace';
       overlay.style.fontSize = '12px';
       overlay.style.overflowY = 'auto';

@@ -84,7 +84,8 @@ let config = {
     SUNRAYS: true,
     SUNRAYS_RESOLUTION: 196,
     SUNRAYS_WEIGHT: 0.5,
-    SHOW_BACKGROUND: true
+    SHOW_BACKGROUND: false,
+    DYNAMIC_CONFIG: false
 }
 
 // Definition of single pointer in canvas
@@ -212,6 +213,7 @@ function supportRenderTextureFormat(gl, internalFormat, format, type) {
 // Todo: get rid of or hide GUI for production
 function startGUI() {
     var gui = new dat.GUI({ width: 300 });
+    gui.add(config, 'DYNAMIC_CONFIG').name('Dynamic Config');
     gui.add(config, 'DYE_RESOLUTION', { 'high': 1024, 'medium': 512, 'low': 256, 'very low': 128 }).name('quality').onFinishChange(initFramebuffers);
     gui.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
     gui.add(config, 'DENSITY_DISSIPATION', 0, 4.0).name('density diffusion');
@@ -1273,7 +1275,7 @@ let latestZ = {};
 // Latest observed angular velocities from incoming messages
 let latestAngVel = { vroll: 0, vpitch: 0, vyaw: 0 };
 
-function computeVelocityDissipation(zdict){
+function computeVelocityDissipation(zdict) {
     // TODO: modify other global variables to have IDs for multiple tracked opbjects
     const posz = zdict[1]
     // zpos between 0 and 1000
@@ -1316,11 +1318,13 @@ function update() {
         initFramebuffers();
     updateColors(dt);
     // Update splat radius and curl based on latest incoming velocities before applying inputs
-    config.SPLAT_RADIUS = computeSplatRadius(latestNormVel);
-    console.log("splat radius: ", config.SPLAT_RADIUS);
-    config.VELOCITY_DISSIPATION = computeVelocityDissipation(latestZ);
-    console.log("velocity dissipation: ", config.VELOCITY_DISSIPATION);
-    config.CURL = computeCurl(latestAngVel.vroll, latestAngVel.vpitch, latestAngVel.vyaw);
+    if (config.DYNAMIC_CONFIG) {
+        config.SPLAT_RADIUS = computeSplatRadius(latestNormVel);
+        console.log("splat radius: ", config.SPLAT_RADIUS);
+        config.VELOCITY_DISSIPATION = computeVelocityDissipation(latestZ);
+        console.log("velocity dissipation: ", config.VELOCITY_DISSIPATION);
+        config.CURL = computeCurl(latestAngVel.vroll, latestAngVel.vpitch, latestAngVel.vyaw);
+    }
     applyInputs();
     if (!config.PAUSED)
         step(dt);
