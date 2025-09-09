@@ -1,64 +1,121 @@
 // Original shader: https://www.shadertoy.com/view/WdVXWy
 // Textures and cubemaps: https://shadertoyunofficial.wordpress.com/2019/07/23/shadertoy-media-files/
 
+const MAX_BODIES = 10;
+let trackedEntities = {};
+let iMouseArray = [];
+for (let i = 0; i < MAX_BODIES; i++) {
+    iMouseArray.push(new THREE.Vector4(0, 0, 0, 0));
+}
+let iMouseTarget = new THREE.Vector4();
+let iJustClickedArray = new Array(MAX_BODIES).fill(0.0);
+
+function cleanupEntities() {
+    const now = Date.now();
+    for (const id in trackedEntities) {
+        if (now - trackedEntities[id].lastSeen > 2000) {
+            const entity = trackedEntities[id];
+            if (entity.iMouse.x === 0 && entity.iMouse.y === 0 && entity.iMouse.z === 0 && entity.iMouse.w === 0) {
+                delete trackedEntities[id];
+            }
+        }
+    }
+}
+
 // Connect to the WebSocket and log data
 window.viewerSocket = io("/viewer", { transports: ["websocket"] });
 window.viewerSocket.on('frame', (payload) => {
-    if (payload && payload.rigidbodies && payload.rigidbodies.length > 0) {
-        const rb = payload.rigidbodies[0];
+    if (!payload || !payload.rigidbodies) return;
+
+    const seenIds = new Set();
+
+    for (const rb of payload.rigidbodies) {
+        seenIds.add(rb.ID);
+
+        if (!trackedEntities[rb.ID]) {
+            let newIndex = -1;
+            const usedIndices = Object.values(trackedEntities).map(e => e.index);
+            for (let i = 1; i < MAX_BODIES; i++) {
+                if (!usedIndices.includes(i)) {
+                    newIndex = i;
+                    break;
+                }
+            }
+
+            if (newIndex === -1) {
+                console.log("Max number of tracked bodies reached.");
+                continue;
+            }
+
+            trackedEntities[rb.ID] = {
+                id: rb.ID,
+                index: newIndex,
+                iMouse: new THREE.Vector4(0, 0, 0, 0),
+                iMouseTarget: new THREE.Vector4(0, 0, 0, 0),
+                lastSeen: Date.now(),
+                stationaryTimer: null,
+                timeoutTimer: null,
+            };
+        }
+
+        const entity = trackedEntities[rb.ID];
+        entity.lastSeen = Date.now();
+        if (entity.timeoutTimer) clearTimeout(entity.timeoutTimer);
+
         const absVel = Math.sqrt(rb.vx * rb.vx + rb.vy * rb.vy);
 
-        if (optitrackMouseUpTimer) clearTimeout(optitrackMouseUpTimer);
-        optitrackMouseUpTimer = setTimeout(() => {
-            iMouse.set(0, 0, 0, 0);
-            iMouseTarget.set(0, 0, 0, 0);
-        }, 100);
-
         if (absVel < STATIONARY_VELOCITY_THRESHOLD) {
-            if (!stationaryTimer) {
-                stationaryTimer = setTimeout(() => {
-                    iMouse.set(0, 0, 0, 0);
-                    iMouseTarget.set(0, 0, 0, 0);
-                    stationaryTimer = null;
+            if (!entity.stationaryTimer) {
+                entity.stationaryTimer = setTimeout(() => {
+                    entity.iMouseTarget.set(0, 0, 0, 0);
+                    entity.stationaryTimer = null;
                 }, STATIONARY_TIMEOUT);
             }
         } else {
-            if (stationaryTimer) {
-                clearTimeout(stationaryTimer);
-                stationaryTimer = null;
+            if (entity.stationaryTimer) {
+                clearTimeout(entity.stationaryTimer);
+                entity.stationaryTimer = null;
             }
 
             const arena_x = 3000;
             const arena_y = 3000;
-
             const norm_x = (-rb.x + arena_x) / (2 * arena_x);
             const norm_y = (rb.y + arena_y) / (2 * arena_y);
-
             const pixelRatio = window.devicePixelRatio;
             const screenX = norm_x * window.innerWidth * pixelRatio;
             const screenY = (1.0 - norm_y) * window.innerHeight * pixelRatio;
 
-            if (iMouseTarget.z === 0 && iMouseTarget.w === 0) {
-                iMouse.x = screenX;
-                iMouse.y = screenY;
+            if (entity.iMouseTarget.z === 0 && entity.iMouseTarget.w === 0) {
+                entity.iMouse.x = screenX;
+                entity.iMouse.y = screenY;
             }
 
-            iMouseTarget.x = screenX;
-            iMouseTarget.y = screenY;
-            iMouseTarget.z = screenX;
-            iMouseTarget.w = screenY;
+            entity.iMouseTarget.x = screenX;
+            entity.iMouseTarget.y = screenY;
+            entity.iMouseTarget.z = screenX;
+            entity.iMouseTarget.w = screenY;
+        }
+    }
+
+    for (const id in trackedEntities) {
+        if (!seenIds.has(parseInt(id, 10))) {
+            const entity = trackedEntities[id];
+            if (!entity.timeoutTimer) {
+                entity.timeoutTimer = setTimeout(() => {
+                    entity.iMouseTarget.set(0, 0, 0, 0);
+                }, 100);
+            }
         }
     }
 });
+
 
 // --- THREE.js implementation for Shadertoy shader ---
 
 let camera, scene, renderer;
 let plane;
-let iMouse = new THREE.Vector4();
 let iResolution = new THREE.Vector3();
 let iChannel0, iChannel1, iChannel2, iChannel3;
-let iMouseTarget = new THREE.Vector4();
 
 // Render targets for buffers (using ping-pong technique)
 let bufferA, bufferB;
@@ -71,8 +128,6 @@ let frame = 0;
 let startTime = Date.now();
 const loader = new THREE.TextureLoader();
 let oscillationEnabled = true;
-let optitrackMouseUpTimer = null;
-let stationaryTimer = null;
 
 // --- Performance Mode ---
 // Can be enabled by adding ?performance=true to the URL
@@ -113,7 +168,6 @@ const bufferAFragmentShader = `
 uniform vec3      iResolution;
 uniform float     iTime;
 uniform int       iFrame;
-uniform vec4      iMouse;
 uniform sampler2D iChannel0;
 uniform sampler2D iChannel1;
 uniform sampler2D iChannel2; // Keyboard texture
@@ -169,13 +223,28 @@ void main()
     vec4 fragColor = textureLod(iChannel0,fract((pos-v*vec2(-1,1)*5.*u_sqrt_res_factor)/Res0.xy),0.);
     fragColor.xy=mix(fragColor.xy,v*vec2(-1,1)*sqrt(.125)*.9,.025);
     
-    vec2 c=fract(scuv(iMouse.xy/iAppResolution.xy))*iResolution.xy;
-    vec2 dmouse=texture(iChannel3,vec2(0.0)).zw;
-    if (iMouse.x<1.) c=Res0*.5;
-    vec2 scr=fract((fragCoord.xy-c)/Res0.x+.5)-.5;
+    vec2 total_push = vec2(0.0);
+    bool any_mouse_active = false;
 
-    if (iMouse.x<1.) fragColor.xy += u_mouseEffect / (dot(scr,scr)/0.05+.05);
-    fragColor.xy += .0003*dmouse/(dot(scr,scr)/0.05+.05);
+    for (int i = 0; i < MAX_BODIES; ++i) {
+        vec4 mouse_data = texture(iChannel3, vec2(0.5, (float(i) + 0.5) / float(MAX_BODIES)));
+        
+        if (mouse_data.x > 1.0) {
+            any_mouse_active = true;
+            vec2 mouse_pos = mouse_data.xy;
+            vec2 mouse_delta = mouse_data.zw;
+            vec2 c = fract(scuv(mouse_pos.xy/iAppResolution.xy))*iResolution.xy;
+            vec2 scr = fract((fragCoord.xy-c)/Res0.x+.5)-.5;
+            total_push += .0003 * mouse_delta / (dot(scr,scr)/0.05+.05);
+        }
+    }
+
+    if (!any_mouse_active) {
+        vec2 c = Res0 * 0.5;
+        vec2 scr = fract((fragCoord.xy-c)/Res0.x+.5)-.5;
+        total_push += u_mouseEffect / (dot(scr,scr)/0.05+.05);
+    }
+    fragColor.xy += total_push;
 
     fragColor.zw += (texture(iChannel1,fragCoord/Res1*.35).zw-.5)*.002;
     fragColor.zw += (texture(iChannel1,fragCoord/Res1*.7).zw-.5)*.001;
@@ -189,23 +258,29 @@ void main()
 
 const bufferBVertexShader = `void main() { gl_Position = vec4( position, 1.0 ); }`;
 const bufferBFragmentShader = `
-uniform vec4      iMouse;
+uniform vec4      iMouse[MAX_BODIES];
 uniform sampler2D iChannel0; // Previous Buffer B state
-uniform float     iJustClicked;
+uniform float     iJustClicked[MAX_BODIES];
 
 void main()
 {
-    vec4 c = texture(iChannel0, vec2(0.0));
-    vec2 m = iMouse.xy;
+    int index = int(gl_FragCoord.y - 0.5);
+    vec2 uv = vec2(0.5, gl_FragCoord.y) / vec2(1.0, float(MAX_BODIES));
+
+    vec4 c = texture(iChannel0, uv);
+    vec4 currentMouse = iMouse[index];
+    float justClicked = iJustClicked[index];
+
+    vec2 m = currentMouse.xy;
     vec2 d = vec2(0);
-    if (iMouse.z > 0.0 && iMouse.w > 0.0) { // Check if mouse is down
-      if (iJustClicked > 0.5) {
+    if (currentMouse.z > 0.0 && currentMouse.w > 0.0) {
+      if (justClicked > 0.5) {
           d = vec2(0.0);
       } else {
-          d = iMouse.xy - c.xy;
+          d = currentMouse.xy - c.xy;
       }
     }
-    gl_FragColor = vec4(m,d);
+    gl_FragColor = vec4(m, d);
 }
 `;
 
@@ -321,9 +396,9 @@ function init() {
     targetA1 = new THREE.WebGLRenderTarget(bufferWidth, bufferHeight, rtOptions);
     targetA2 = new THREE.WebGLRenderTarget(bufferWidth, bufferHeight, rtOptions);
 
-    // Buffer B is small, just for mouse data
-    targetB1 = new THREE.WebGLRenderTarget(1, 1, rtOptions);
-    targetB2 = new THREE.WebGLRenderTarget(1, 1, rtOptions);
+    // Buffer B is for mouse data
+    targetB1 = new THREE.WebGLRenderTarget(1, MAX_BODIES, rtOptions);
+    targetB2 = new THREE.WebGLRenderTarget(1, MAX_BODIES, rtOptions);
 
     // --- Materials ---
     const loopIterations = performanceMode ? 10 : 20;
@@ -357,7 +432,7 @@ function init() {
             iResolution: { value: new THREE.Vector3(bufferWidth, bufferHeight, 1) },
             iTime: { value: 0.0 },
             iFrame: { value: 0 },
-            iMouse: { value: iMouse },
+            iMouse: { value: iMouseArray },
             iChannel0: { value: null }, // Buffer A (self)
             iChannel1: { value: noiseTexture },
             iChannel2: { value: null }, // Placeholder for keyboard tex
@@ -372,17 +447,17 @@ function init() {
             u_sqrt_res_factor: { value: u_sqrt_res_factor }
         },
         vertexShader: bufferAVertexShader,
-        fragmentShader: `#define LoopIterations ${loopIterations}\n#define RotNum 5\n` + commonShader + bufferAFragmentShader
+        fragmentShader: `#define LoopIterations ${loopIterations}\n#define RotNum 5\n#define MAX_BODIES ${MAX_BODIES}\n` + commonShader + bufferAFragmentShader
     });
 
     bufferB = new THREE.ShaderMaterial({
         uniforms: {
-            iMouse: { value: iMouse },
+            iMouse: { value: iMouseArray },
             iChannel0: { value: null }, // Buffer B (self)
-            iJustClicked: { value: 0.0 }
+            iJustClicked: { value: iJustClickedArray }
         },
         vertexShader: bufferBVertexShader,
-        fragmentShader: commonShader + bufferBFragmentShader
+        fragmentShader: `#define MAX_BODIES ${MAX_BODIES}\n` + commonShader + bufferBFragmentShader
     });
 
     const imageMaterial = new THREE.ShaderMaterial({
@@ -403,13 +478,11 @@ function init() {
     scene.add(finalMesh);
 
     // --- Event Listeners ---
+    let stationaryMouseTimer = null;
     document.addEventListener('mousemove', (e) => {
         if (e.buttons === 1) { // Left mouse button down
-            if (stationaryTimer) {
-                clearTimeout(stationaryTimer);
-            }
-            stationaryTimer = setTimeout(() => {
-                iMouse.set(0, 0, 0, 0);
+            if (stationaryMouseTimer) clearTimeout(stationaryMouseTimer);
+            stationaryMouseTimer = setTimeout(() => {
                 iMouseTarget.set(0, 0, 0, 0);
             }, STATIONARY_TIMEOUT);
 
@@ -421,26 +494,21 @@ function init() {
 
     document.addEventListener('mousedown', (e) => {
         if (e.buttons === 1) {
-            bufferB.uniforms.iJustClicked.value = 1.0;
+            iJustClickedArray[0] = 1.0;
             const pixelRatio = window.devicePixelRatio;
             const x = e.clientX * pixelRatio;
             const y = (window.innerHeight - e.clientY) * pixelRatio;
-            iMouse.x = x;
-            iMouse.y = y;
-            iMouse.z = x;
-            iMouse.w = y;
-            iMouseTarget.copy(iMouse);
+            iMouseArray[0].set(x, y, x, y);
+            iMouseTarget.copy(iMouseArray[0]);
         }
     });
 
     document.addEventListener('mouseup', () => {
-        // Reset all mouse coordinates to signal that the user is no longer interacting.
-        // This is the key to re-engaging the shader's autonomous "motor".
-        if (stationaryTimer) {
-            clearTimeout(stationaryTimer);
-            stationaryTimer = null;
+        if (stationaryMouseTimer) {
+            clearTimeout(stationaryMouseTimer);
+            stationaryMouseTimer = null;
         }
-        iMouse.set(0, 0, 0, 0);
+        iMouseArray[0].set(0, 0, 0, 0);
         iMouseTarget.set(0, 0, 0, 0);
     });
 
@@ -482,19 +550,33 @@ function onWindowResize() {
 function animate() {
     requestAnimationFrame(animate);
 
+    cleanupEntities();
+
     const elapsedTime = (Date.now() - startTime) / 1000.0;
 
     // Smoothly interpolate iMouse towards iMouseTarget
-    iMouse.x += (iMouseTarget.x - iMouse.x) * MOUSE_SMOOTHING;
-    iMouse.y += (iMouseTarget.y - iMouse.y) * MOUSE_SMOOTHING;
-    iMouse.z = iMouseTarget.z; // z and w are flags, not smoothed
-    iMouse.w = iMouseTarget.w;
+    iMouseArray[0].x += (iMouseTarget.x - iMouseArray[0].x) * MOUSE_SMOOTHING;
+    iMouseArray[0].y += (iMouseTarget.y - iMouseArray[0].y) * MOUSE_SMOOTHING;
+    iMouseArray[0].z = iMouseTarget.z; // z and w are flags, not smoothed
+    iMouseArray[0].w = iMouseTarget.w;
+
+    for (const id in trackedEntities) {
+        const entity = trackedEntities[id];
+        entity.iMouse.x += (entity.iMouseTarget.x - entity.iMouse.x) * MOUSE_SMOOTHING;
+        entity.iMouse.y += (entity.iMouseTarget.y - entity.iMouse.y) * MOUSE_SMOOTHING;
+        entity.iMouse.z = entity.iMouseTarget.z;
+        entity.iMouse.w = entity.iMouseTarget.w;
+
+        if (entity.index >= 0 && entity.index < MAX_BODIES) {
+            iMouseArray[entity.index].copy(entity.iMouse);
+        }
+    }
 
     // --- Render Buffer B ---
     bufferB.uniforms.iChannel0.value = targetB1.texture;
     renderer.setRenderTarget(targetB2);
     renderer.render(new THREE.Scene().add(new THREE.Mesh(plane, bufferB)), camera);
-    bufferB.uniforms.iJustClicked.value = 0.0; // Reset after one frame
+    iJustClickedArray.fill(0.0);
     // Swap B
     [targetB1, targetB2] = [targetB2, targetB1];
 
