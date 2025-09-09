@@ -3,7 +3,7 @@
 // 1. Running a local web and WebSocket server to handle data from the OptiTrack system.
 // 2. Creating a native desktop window (renderer process) that displays the front-end visualization.
 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 
 // The server is run directly within the main process (self-contained)
@@ -51,7 +51,7 @@ function startHttpServer() {
 }
 
 // Creates and configures the main application window.
-function createWindow() {
+function createWindow(shader) {
   const win = new BrowserWindow({
     width: 1050,
     height: 1050,
@@ -70,7 +70,11 @@ function createWindow() {
   });
 
   // The window loads its content from the local server, just like a web browser.
-  win.loadURL(`http://127.0.0.1:${PORT}/`);
+  let url = `http://127.0.0.1:${PORT}/`;
+  if (shader === 'molten') {
+    url = `http://127.0.0.1:${PORT}/molten/`;
+  }
+  win.loadURL(url);
   win.webContents.on('did-finish-load', () => {
     win.webContents.executeJavaScript(`window.__SOCKET_PORT__=${PORT}`);
   });
@@ -79,11 +83,23 @@ function createWindow() {
 // Electron's initialization is asynchronous. This block executes once the app is ready.
 app.whenReady().then(() => {
   startHttpServer();
-  createWindow();
+
+  const choice = dialog.showMessageBoxSync({
+    type: 'question',
+    buttons: ['Splat', 'Molten'],
+    defaultId: 0,
+    title: 'Choose Shader',
+    message: 'Which shader would you like to use?',
+    detail: 'Splat is the default fluid simulation. Molten is an alternative.'
+  });
+
+  const shader = choice === 0 ? 'splat' : 'molten';
+
+  createWindow(shader);
 
   // Handle macOS-specific behavior for re-creating a window.
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(shader);
   });
 });
 
