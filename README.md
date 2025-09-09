@@ -19,6 +19,37 @@ Audio-visual Art Project Using Spatial Augmented Reality
 
 # How It Works
 
+```mermaid
+graph TD
+    subgraph Python Backend
+        A[OptiTrack Client<br>start_client.py]
+    end
+
+    subgraph Electron Main Process
+        B(main.js Server)
+        B1[Socket.IO Namespace<br>/ingest]
+        B2[Socket.IO Namespace<br>/viewer]
+    end
+
+    subgraph Frontend Renderer Process
+        C(Host Page<br>index.html)
+        D(Bridge Script<br>fluid-bridge.js)
+        E(Simulation<br>iframe - fluid/script.js)
+    end
+
+    A -- "sends 'frame' data" --> B1
+    B --- B1
+    B --- B2
+    B1 -- "broadcasts 'frame' data" --> B2
+    B2 -- "emits 'frame' to client" --> D
+    C -- "loads" --> D
+    C -- "contains" --> E
+    D -- "sends 'splat' message<br>via postMessage()" --> E
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style E fill:#ccf,stroke:#333,stroke-width:2px
+```
+
 ### Initialization and Data Flow Sequence
 
 This project uses a Node.js-based Electron application to receive and visualize motion capture data from the OptiTrack system. Here is a high-level overview of the data flow:
