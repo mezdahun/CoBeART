@@ -23,6 +23,7 @@ let targetB1, targetB2;
 let frame = 0;
 let startTime = Date.now();
 const loader = new THREE.TextureLoader();
+let oscillationEnabled = true;
 
 // Shaders
 const commonShader = `
@@ -139,15 +140,31 @@ void main()
 const imageVertexShader = `void main() { gl_Position = vec4( position, 1.0 ); }`;
 const imageFragmentShader = `
 uniform vec3      iResolution;
+uniform float     iTime;
 uniform sampler2D iChannel0; // Buffer A
 uniform samplerCube iChannel2; // Environment Cubemap
+uniform samplerCube iChannel3; // Second Environment Cubemap
+uniform float     u_oscillationEnabled;
 
 #define Res  (iResolution.xy)
+#define PI 3.14159265359
 
 vec4 myenv(vec3 pos, vec3 dir, float period)
 {
-    // Sample the cubemap with the reflection vector
-    return texture(iChannel2, dir.xzy) + 0.15;
+    // Sample the cubemaps with the reflection vector
+    vec4 env1 = texture(iChannel2, dir.xzy) + 0.15; // original
+
+    if (u_oscillationEnabled < 0.5) {
+        return env1;
+    }
+
+    vec4 env2 = texture(iChannel3, dir.xzy) + 0.15; // new
+
+    // Create a blend weight that oscillates between 0.0 and 1.0 over time
+    float w = (sin(iTime * (2.0 * PI / 60.0)) + 1.0) / 2.0;
+
+    // Blend between env1 and (0.4 * env1 + 0.6 * env2)
+    return env1 * (1.0 - 0.6 * w) + env2 * (0.6 * w);
 }
 
 vec4 getCol(vec2 uv) {
@@ -217,6 +234,12 @@ function init() {
             cube.encoding = THREE.LinearEncoding;
         });
 
+    const envMapTexture2 = cubeTextureLoader
+        .setPath('textures/')
+        .load(['px2.png', 'nx2.png', 'py2.png', 'ny2.png', 'pz2.png', 'nz2.png'], (cube) => {
+            cube.encoding = THREE.LinearEncoding;
+        });
+
     // Create render targets for ping-ponging
     const rtOptions = {
         minFilter: THREE.LinearFilter,
@@ -263,8 +286,11 @@ function init() {
     const imageMaterial = new THREE.ShaderMaterial({
         uniforms: {
             iResolution: { value: iResolution },
+            iTime: { value: 0.0 },
             iChannel0: { value: null }, // Buffer A
             iChannel2: { value: envMapTexture },
+            iChannel3: { value: envMapTexture2 },
+            u_oscillationEnabled: { value: 1.0 },
         },
         vertexShader: imageVertexShader,
         fragmentShader: imageFragmentShader
@@ -306,6 +332,10 @@ function init() {
     document.addEventListener('keydown', (e) => {
         if (e.key.toLowerCase() === 'i') {
             bufferA.uniforms.keyI.value = 1.0;
+        }
+        if (e.code === 'Space') {
+            e.preventDefault();
+            oscillationEnabled = !oscillationEnabled;
         }
     });
 
@@ -349,6 +379,8 @@ function animate() {
 
     // --- Render final image to screen ---
     scene.children[0].material.uniforms.iChannel0.value = targetA1.texture;
+    scene.children[0].material.uniforms.iTime.value = elapsedTime;
+    scene.children[0].material.uniforms.u_oscillationEnabled.value = oscillationEnabled ? 1.0 : 0.0;
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
 
