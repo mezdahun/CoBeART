@@ -1,5 +1,7 @@
 (function () {
   function init() {
+    // Finds the id=fluidFrame iframe element that was created in the index.html file,
+    // and that holds the embedded fluid simulation.
     let frameEl = document.getElementById('fluidFrame');
     if (!frameEl) {
       frameEl = document.createElement('iframe');
@@ -34,6 +36,7 @@
       document.body.appendChild(overlay);
     }
 
+    // Connects to the /viewer namespace on the server hosted in electron/main.js
     const socket = window.viewerSocket || io('/viewer', { transports: ['websocket'] });
 
     socket.on('connect', () => console.log('[fluid-bridge] socket connected', socket.id));
@@ -52,7 +55,7 @@
     let latestFrame = null; // Store the latest frame
     const bridgeFramerate = 240; // Target bridge framerate in Hz
 
-    // Receive frames from the server and store the latest one
+    // Receive frames emitted by the electron/main.js server and store the latest one
     socket.on('frame', (payload) => {
       if (payload) {
         console.log('[fluid-bridge] received frame', payload);
@@ -98,6 +101,7 @@ Angular Velocity: (vroll: ${vroll.toFixed(2)}, vpitch: ${vpitch.toFixed(2)}, vya
 
 
     // Timer to send the latest frame at the bridge framerate
+    // setInterval is a function that calls a function repeatedly at a fixed interval.
     setInterval(() => {
       if (latestFrame) {
         const list = Array.isArray(latestFrame.rigidbodies) ? latestFrame.rigidbodies : [];
@@ -121,14 +125,16 @@ Angular Velocity: (vroll: ${vroll.toFixed(2)}, vpitch: ${vpitch.toFixed(2)}, vya
           const normVel = rb.norm_abs_vel;
           postToFluid({ type: 'splat', id, x, y, z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw, absVel, normVel, color });
           console.log('DEBUG: sent splat', absVel, normVel);
-//          const consoleMessage = `[fluid-bridge] sent splat id:${id} pos:(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) vel:(${vx.toFixed(2)}, ${vy.toFixed(2)}, ${vz.toFixed(2)})`;
-//          console.log('[fluid-bridge] sent splat', { id, x, y , z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw });
+          //          const consoleMessage = `[fluid-bridge] sent splat id:${id} pos:(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) vel:(${vx.toFixed(2)}, ${vy.toFixed(2)}, ${vz.toFixed(2)})`;
+          //          console.log('[fluid-bridge] sent splat', { id, x, y , z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw });
         }
         latestFrame = null; // Clear the frame after sending
       }
     }, 1000 / bridgeFramerate);
   }
 
+  // This block instructs the browser to call the init function only once the DOM is fully loaded, 
+  // such that the script does not reference elements that don't exist.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
