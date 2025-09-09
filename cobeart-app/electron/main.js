@@ -98,7 +98,7 @@ app.whenReady().then(() => {
     checkboxChecked: false
   });
 
-  const shader = choice.response === 0 ? 'splat' : 'molten';
+  const shader = choice === 0 ? 'splat' : 'molten';
   const usePerfMode = choice.checkboxChecked;
 
   createWindow(shader, usePerfMode);
