@@ -4,7 +4,51 @@
 // Connect to the WebSocket and log data
 window.viewerSocket = io("/viewer", { transports: ["websocket"] });
 window.viewerSocket.on('frame', (payload) => {
-    console.log('Received frame:', payload);
+    if (payload && payload.rigidbodies && payload.rigidbodies.length > 0) {
+        const rb = payload.rigidbodies[0];
+        const absVel = Math.sqrt(rb.vx * rb.vx + rb.vy * rb.vy);
+
+        if (optitrackMouseUpTimer) clearTimeout(optitrackMouseUpTimer);
+        optitrackMouseUpTimer = setTimeout(() => {
+            iMouse.set(0, 0, 0, 0);
+            iMouseTarget.set(0, 0, 0, 0);
+        }, 100);
+
+        if (absVel < STATIONARY_VELOCITY_THRESHOLD) {
+            if (!stationaryTimer) {
+                stationaryTimer = setTimeout(() => {
+                    iMouse.set(0, 0, 0, 0);
+                    iMouseTarget.set(0, 0, 0, 0);
+                    stationaryTimer = null;
+                }, STATIONARY_TIMEOUT);
+            }
+        } else {
+            if (stationaryTimer) {
+                clearTimeout(stationaryTimer);
+                stationaryTimer = null;
+            }
+
+            const arena_x = 3000;
+            const arena_y = 3000;
+
+            const norm_x = (-rb.x + arena_x) / (2 * arena_x);
+            const norm_y = (rb.y + arena_y) / (2 * arena_y);
+
+            const pixelRatio = window.devicePixelRatio;
+            const screenX = norm_x * window.innerWidth * pixelRatio;
+            const screenY = (1.0 - norm_y) * window.innerHeight * pixelRatio;
+
+            if (iMouseTarget.z === 0 && iMouseTarget.w === 0) {
+                iMouse.x = screenX;
+                iMouse.y = screenY;
+            }
+
+            iMouseTarget.x = screenX;
+            iMouseTarget.y = screenY;
+            iMouseTarget.z = screenX;
+            iMouseTarget.w = screenY;
+        }
+    }
 });
 
 // --- THREE.js implementation for Shadertoy shader ---
@@ -14,6 +58,7 @@ let plane;
 let iMouse = new THREE.Vector4();
 let iResolution = new THREE.Vector3();
 let iChannel0, iChannel1, iChannel2, iChannel3;
+let iMouseTarget = new THREE.Vector4();
 
 // Render targets for buffers (using ping-pong technique)
 let bufferA, bufferB;
@@ -24,6 +69,14 @@ let frame = 0;
 let startTime = Date.now();
 const loader = new THREE.TextureLoader();
 let oscillationEnabled = true;
+let optitrackMouseUpTimer = null;
+let stationaryTimer = null;
+
+// The velocity threshold (in mm/s) below which the object is considered stationary.
+const STATIONARY_VELOCITY_THRESHOLD = 50;
+// The time (in ms) after which a stationary object triggers a "mouse up" event.
+const STATIONARY_TIMEOUT = 200;
+const MOUSE_SMOOTHING = 0.2;
 
 // Shaders
 const commonShader = `
@@ -124,6 +177,7 @@ const bufferBVertexShader = `void main() { gl_Position = vec4( position, 1.0 ); 
 const bufferBFragmentShader = `
 uniform vec4      iMouse;
 uniform sampler2D iChannel0; // Previous Buffer B state
+uniform float     iJustClicked;
 
 void main()
 {
@@ -131,7 +185,11 @@ void main()
     vec2 m = iMouse.xy;
     vec2 d = vec2(0);
     if (iMouse.z > 0.0 && iMouse.w > 0.0) { // Check if mouse is down
-      d=iMouse.xy-c.xy;
+      if (iJustClicked > 0.5) {
+          d = vec2(0.0);
+      } else {
+          d = iMouse.xy - c.xy;
+      }
     }
     gl_FragColor = vec4(m,d);
 }
@@ -277,7 +335,8 @@ function init() {
     bufferB = new THREE.ShaderMaterial({
         uniforms: {
             iMouse: { value: iMouse },
-            iChannel0: { value: null } // Buffer B (self)
+            iChannel0: { value: null }, // Buffer B (self)
+            iJustClicked: { value: 0.0 }
         },
         vertexShader: bufferBVertexShader,
         fragmentShader: commonShader + bufferBFragmentShader
@@ -302,31 +361,43 @@ function init() {
     // --- Event Listeners ---
     document.addEventListener('mousemove', (e) => {
         if (e.buttons === 1) { // Left mouse button down
+            if (stationaryTimer) {
+                clearTimeout(stationaryTimer);
+            }
+            stationaryTimer = setTimeout(() => {
+                iMouse.set(0, 0, 0, 0);
+                iMouseTarget.set(0, 0, 0, 0);
+            }, STATIONARY_TIMEOUT);
+
             const pixelRatio = window.devicePixelRatio;
-            iMouse.x = e.clientX * pixelRatio;
-            iMouse.y = (window.innerHeight - e.clientY) * pixelRatio;
-            iMouse.z = e.clientX * pixelRatio;
-            iMouse.w = (window.innerHeight - e.clientY) * pixelRatio;
+            iMouseTarget.x = e.clientX * pixelRatio;
+            iMouseTarget.y = (window.innerHeight - e.clientY) * pixelRatio;
         }
     });
 
     document.addEventListener('mousedown', (e) => {
         if (e.buttons === 1) {
+            bufferB.uniforms.iJustClicked.value = 1.0;
             const pixelRatio = window.devicePixelRatio;
-            iMouse.x = e.clientX * pixelRatio;
-            iMouse.y = (window.innerHeight - e.clientY) * pixelRatio;
-            iMouse.z = e.clientX * pixelRatio;
-            iMouse.w = (window.innerHeight - e.clientY) * pixelRatio;
+            const x = e.clientX * pixelRatio;
+            const y = (window.innerHeight - e.clientY) * pixelRatio;
+            iMouse.x = x;
+            iMouse.y = y;
+            iMouse.z = x;
+            iMouse.w = y;
+            iMouseTarget.copy(iMouse);
         }
     });
 
     document.addEventListener('mouseup', () => {
         // Reset all mouse coordinates to signal that the user is no longer interacting.
         // This is the key to re-engaging the shader's autonomous "motor".
-        iMouse.x = 0;
-        iMouse.y = 0;
-        iMouse.z = 0;
-        iMouse.w = 0;
+        if (stationaryTimer) {
+            clearTimeout(stationaryTimer);
+            stationaryTimer = null;
+        }
+        iMouse.set(0, 0, 0, 0);
+        iMouseTarget.set(0, 0, 0, 0);
     });
 
     document.addEventListener('keydown', (e) => {
@@ -360,10 +431,17 @@ function animate() {
 
     const elapsedTime = (Date.now() - startTime) / 1000.0;
 
+    // Smoothly interpolate iMouse towards iMouseTarget
+    iMouse.x += (iMouseTarget.x - iMouse.x) * MOUSE_SMOOTHING;
+    iMouse.y += (iMouseTarget.y - iMouse.y) * MOUSE_SMOOTHING;
+    iMouse.z = iMouseTarget.z; // z and w are flags, not smoothed
+    iMouse.w = iMouseTarget.w;
+
     // --- Render Buffer B ---
     bufferB.uniforms.iChannel0.value = targetB1.texture;
     renderer.setRenderTarget(targetB2);
     renderer.render(new THREE.Scene().add(new THREE.Mesh(plane, bufferB)), camera);
+    bufferB.uniforms.iJustClicked.value = 0.0; // Reset after one frame
     // Swap B
     [targetB1, targetB2] = [targetB2, targetB1];
 
