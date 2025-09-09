@@ -51,7 +51,7 @@ function startHttpServer() {
 }
 
 // Creates and configures the main application window.
-function createWindow(shader) {
+function createWindow(shader, usePerfMode) {
   const win = new BrowserWindow({
     width: 1050,
     height: 1050,
@@ -73,6 +73,9 @@ function createWindow(shader) {
   let url = `http://127.0.0.1:${PORT}/`;
   if (shader === 'molten') {
     url = `http://127.0.0.1:${PORT}/molten/`;
+    if (usePerfMode) {
+      url += '?performance=true';
+    }
   }
   win.loadURL(url);
   win.webContents.on('did-finish-load', () => {
@@ -88,18 +91,21 @@ app.whenReady().then(() => {
     type: 'question',
     buttons: ['Splat', 'Molten'],
     defaultId: 0,
-    title: 'Choose Shader',
-    message: 'Which shader would you like to use?',
-    detail: 'Splat is the default fluid simulation. Molten is an alternative.'
+    title: 'Choose Visualization',
+    message: 'Which visualization would you like to use?',
+    detail: 'Splat is a fluid simulation. Molten is an alternative.',
+    checkboxLabel: 'Performance Mode (Molten only)',
+    checkboxChecked: false
   });
 
-  const shader = choice === 0 ? 'splat' : 'molten';
+  const shader = choice.response === 0 ? 'splat' : 'molten';
+  const usePerfMode = choice.checkboxChecked;
 
-  createWindow(shader);
+  createWindow(shader, usePerfMode);
 
   // Handle macOS-specific behavior for re-creating a window.
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(shader);
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(shader, usePerfMode);
   });
 });
 

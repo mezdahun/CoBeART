@@ -1,5 +1,5 @@
-// https://www.shadertoy.com/view/WdVXWy
-// https://shadertoyunofficial.wordpress.com/2019/07/23/shadertoy-media-files/
+// Original shader: https://www.shadertoy.com/view/WdVXWy
+// Textures and cubemaps: https://shadertoyunofficial.wordpress.com/2019/07/23/shadertoy-media-files/
 
 // Connect to the WebSocket and log data
 window.viewerSocket = io("/viewer", { transports: ["websocket"] });
@@ -65,12 +65,20 @@ let bufferA, bufferB;
 let targetA1, targetA2;
 let targetB1, targetB2;
 
+let RESOLUTION_SCALE = 0.5;
+
 let frame = 0;
 let startTime = Date.now();
 const loader = new THREE.TextureLoader();
 let oscillationEnabled = true;
 let optitrackMouseUpTimer = null;
 let stationaryTimer = null;
+
+// --- Performance Mode ---
+// Can be enabled by adding ?performance=true to the URL
+const urlParams = new URLSearchParams(window.location.search);
+let performanceMode = urlParams.get('performance') === 'true';
+
 
 // The velocity threshold (in mm/s) below which the object is considered stationary.
 const STATIONARY_VELOCITY_THRESHOLD = 50;
@@ -110,25 +118,32 @@ uniform sampler2D iChannel0;
 uniform sampler2D iChannel1;
 uniform sampler2D iChannel2; // Keyboard texture
 uniform sampler2D iChannel3; // Buffer B
+uniform vec3      iAppResolution;
 uniform float     keyI;
+uniform vec2      u_b; // Pre-calculated offset vector
+uniform vec2      u_mouseEffect; // Pre-calculated mouse shimmer effect
+uniform mat3      u_m; // Pre-calculated rotation matrix
+uniform mat3      u_mh; // Pre-calculated half-angle rotation matrix
+uniform float     u_bbMax; // Pre-calculated loop boundary condition
+uniform float     u_sqrt_res_factor; // Pre-calculated resolution-dependent sqrt factor
 
 #define keyTex iChannel2
 #define KEY_I keyI
 #define PI2 6.283185
 
-const float ang = PI2/float(RotNum);
-mat2 m = mat2(cos(ang),sin(ang),-sin(ang),cos(ang));
-mat2 mh = mat2(cos(ang*0.5),sin(ang*0.5),-sin(ang*0.5),cos(ang*0.5));
+// const float ang = PI2/float(RotNum);
+// mat2 m = mat2(cos(ang),sin(ang),-sin(ang),cos(ang));
+// mat2 mh = mat2(cos(ang*0.5),sin(ang*0.5),-sin(ang*0.5),cos(ang*0.5));
 
 float getRot(vec2 pos, vec2 b)
 {
-    float l=log2(dot(b,b))*sqrt(.125)*.0;
+    float l = 0.0;
     vec2 p = b;
     float rot=0.0;
     for(int i=0;i<RotNum;i++)
     {
         rot+=dot(textureLod(iChannel0,((pos+p)/Res0.xy),l).xy-vec2(0.5),p.yx*vec2(1,-1));
-        p = m*p;
+        p = mat2(u_m)*p;
     }
     return rot/float(RotNum)/dot(b,b);
 }
@@ -137,30 +152,29 @@ void main()
 {
     vec2 fragCoord = gl_FragCoord.xy;
     vec2 pos = fragCoord;
-    vec2 b = cos(float(iFrame)*.3-vec2(0,1.57));
+    vec2 b = u_b;
     vec2 v=vec2(0);
-    float bbMax=.5*Res0.y; bbMax*=bbMax;
-    for(int l=0;l<20;l++)
+    for(int l=0;l<LoopIterations;l++)
     {
-        if ( dot(b,b) > bbMax ) break;
+        if ( dot(b,b) > u_bbMax ) break;
         vec2 p = b;
         for(int i=0;i<RotNum;i++)
         {
-            v+=p.yx*getRot(pos+p,-mh*b);
-            p = m*p;
+            v+=p.yx*getRot(pos+p,-mat2(u_mh)*b);
+            p = mat2(u_m)*p;
         }
         b*=2.0;
     }
     
-    vec4 fragColor = textureLod(iChannel0,fract((pos-v*vec2(-1,1)*5.*sqrt(Res0.x/600.))/Res0.xy),0.);
+    vec4 fragColor = textureLod(iChannel0,fract((pos-v*vec2(-1,1)*5.*u_sqrt_res_factor)/Res0.xy),0.);
     fragColor.xy=mix(fragColor.xy,v*vec2(-1,1)*sqrt(.125)*.9,.025);
     
-    vec2 c=fract(scuv(iMouse.xy/iResolution.xy))*iResolution.xy;
+    vec2 c=fract(scuv(iMouse.xy/iAppResolution.xy))*iResolution.xy;
     vec2 dmouse=texture(iChannel3,vec2(0.0)).zw;
     if (iMouse.x<1.) c=Res0*.5;
     vec2 scr=fract((fragCoord.xy-c)/Res0.x+.5)-.5;
 
-    if (iMouse.x<1.) fragColor.xy += 0.003*cos(iTime*.3-vec2(0,1.57)) / (dot(scr,scr)/0.05+.05);
+    if (iMouse.x<1.) fragColor.xy += u_mouseEffect / (dot(scr,scr)/0.05+.05);
     fragColor.xy += .0003*dmouse/(dot(scr,scr)/0.05+.05);
 
     fragColor.zw += (texture(iChannel1,fragCoord/Res1*.35).zw-.5)*.002;
@@ -203,6 +217,7 @@ uniform sampler2D iChannel0; // Buffer A
 uniform samplerCube iChannel2; // Environment Cubemap
 uniform samplerCube iChannel3; // Second Environment Cubemap
 uniform float     u_oscillationEnabled;
+uniform float     u_blendWeight;
 
 #define Res  (iResolution.xy)
 #define PI 3.14159265359
@@ -218,8 +233,7 @@ vec4 myenv(vec3 pos, vec3 dir, float period)
 
     vec4 env2 = texture(iChannel3, dir.xzy) + 0.15; // new
 
-    // Create a blend weight that oscillates between 0.0 and 1.0 over time
-    float w = (sin(iTime * (2.0 * PI / 60.0)) + 1.0) / 2.0;
+    float w = u_blendWeight;
 
     // Blend between env1 and (0.4 * env1 + 0.6 * env2)
     return env1 * (1.0 - 0.6 * w) + env2 * (0.6 * w);
@@ -261,10 +275,9 @@ void main()
 
 function init() {
     renderer = new THREE.WebGLRenderer();
-    renderer.setPixelRatio(window.devicePixelRatio);
+    const pixelRatio = performanceMode ? Math.min(window.devicePixelRatio, 1.5) : window.devicePixelRatio;
+    renderer.setPixelRatio(pixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
-    // This is the critical change. We must disable color space management for the raw
-    // data in our simulation buffers to prevent precision loss over time.
     renderer.outputEncoding = THREE.LinearEncoding;
     document.body.appendChild(renderer.domElement);
 
@@ -286,9 +299,6 @@ function init() {
     const envMapTexture = cubeTextureLoader
         .setPath('textures/')
         .load(['px.jpg', 'nx.jpg', 'py.jpg', 'ny.jpg', 'pz.jpg', 'nz.jpg'], (cube) => {
-            // This is the key to matching the original's color. By setting the encoding
-            // to Linear, we tell three.js to NOT perform sRGB -> Linear conversion,
-            // sending the raw texture values to the shader, which is what Shadertoy does.
             cube.encoding = THREE.LinearEncoding;
         });
 
@@ -301,24 +311,50 @@ function init() {
     // Create render targets for ping-ponging
     const rtOptions = {
         minFilter: THREE.LinearFilter,
-        // Using LinearFilter for magnification is crucial to prevent the simulation
-        // from degrading into a blocky/murky state over time.
         magFilter: THREE.LinearFilter,
         format: THREE.RGBAFormat,
-        // Using 32-bit floats is also essential for precision in the feedback loop.
         type: THREE.FloatType,
     };
-    targetA1 = new THREE.WebGLRenderTarget(iResolution.x, iResolution.y, rtOptions);
-    targetA2 = new THREE.WebGLRenderTarget(iResolution.x, iResolution.y, rtOptions);
+    RESOLUTION_SCALE = performanceMode ? 0.5 : 1.0;
+    const bufferWidth = Math.floor(iResolution.x * RESOLUTION_SCALE);
+    const bufferHeight = Math.floor(iResolution.y * RESOLUTION_SCALE);
+    targetA1 = new THREE.WebGLRenderTarget(bufferWidth, bufferHeight, rtOptions);
+    targetA2 = new THREE.WebGLRenderTarget(bufferWidth, bufferHeight, rtOptions);
 
     // Buffer B is small, just for mouse data
     targetB1 = new THREE.WebGLRenderTarget(1, 1, rtOptions);
     targetB2 = new THREE.WebGLRenderTarget(1, 1, rtOptions);
 
     // --- Materials ---
+    const loopIterations = performanceMode ? 10 : 20;
+    const rotNum = 5.0;
+    const ang = Math.PI * 2 / rotNum;
+    const cos_ang = Math.cos(ang);
+    const sin_ang = Math.sin(ang);
+    // THREE.Matrix2 does not exist in this version. We can use the top-left
+    // 2x2 portion of a THREE.Matrix3 to achieve the same result.
+    // The elements are provided in row-major order.
+    const u_m = new THREE.Matrix3().set(
+        cos_ang, -sin_ang, 0,
+        sin_ang, cos_ang, 0,
+        0, 0, 1
+    );
+
+    const ang_half = ang * 0.5;
+    const cos_ang_half = Math.cos(ang_half);
+    const sin_ang_half = Math.sin(ang_half);
+    const u_mh = new THREE.Matrix3().set(
+        cos_ang_half, -sin_ang_half, 0,
+        sin_ang_half, cos_ang_half, 0,
+        0, 0, 1
+    );
+    const u_bbMax = 0.5 * bufferHeight * 0.5 * bufferHeight;
+    const u_sqrt_res_factor = Math.sqrt(bufferWidth / 600.0);
+
+
     bufferA = new THREE.ShaderMaterial({
         uniforms: {
-            iResolution: { value: iResolution },
+            iResolution: { value: new THREE.Vector3(bufferWidth, bufferHeight, 1) },
             iTime: { value: 0.0 },
             iFrame: { value: 0 },
             iMouse: { value: iMouse },
@@ -326,10 +362,17 @@ function init() {
             iChannel1: { value: noiseTexture },
             iChannel2: { value: null }, // Placeholder for keyboard tex
             iChannel3: { value: null }, // Buffer B
-            keyI: { value: 0.0 }
+            iAppResolution: { value: iResolution },
+            keyI: { value: 0.0 },
+            u_b: { value: new THREE.Vector2() },
+            u_mouseEffect: { value: new THREE.Vector2() },
+            u_m: { value: u_m },
+            u_mh: { value: u_mh },
+            u_bbMax: { value: u_bbMax },
+            u_sqrt_res_factor: { value: u_sqrt_res_factor }
         },
         vertexShader: bufferAVertexShader,
-        fragmentShader: '#define RotNum 5\n' + commonShader + bufferAFragmentShader
+        fragmentShader: `#define LoopIterations ${loopIterations}\n#define RotNum 5\n` + commonShader + bufferAFragmentShader
     });
 
     bufferB = new THREE.ShaderMaterial({
@@ -350,6 +393,7 @@ function init() {
             iChannel2: { value: envMapTexture },
             iChannel3: { value: envMapTexture2 },
             u_oscillationEnabled: { value: 1.0 },
+            u_blendWeight: { value: 0.0 }
         },
         vertexShader: imageVertexShader,
         fragmentShader: imageFragmentShader
@@ -416,14 +460,23 @@ function init() {
 function onWindowResize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
+
+    const pixelRatio = performanceMode ? Math.min(window.devicePixelRatio, 1.5) : window.devicePixelRatio;
+    renderer.setPixelRatio(pixelRatio);
     renderer.setSize(w, h);
 
     const drawingBufferSize = new THREE.Vector2();
     renderer.getDrawingBufferSize(drawingBufferSize);
     iResolution.set(drawingBufferSize.x, drawingBufferSize.y, 1);
 
-    targetA1.setSize(drawingBufferSize.x, drawingBufferSize.y);
-    targetA2.setSize(drawingBufferSize.x, drawingBufferSize.y);
+    RESOLUTION_SCALE = performanceMode ? 0.5 : 1.0;
+    const bufferWidth = Math.floor(iResolution.x * RESOLUTION_SCALE);
+    const bufferHeight = Math.floor(iResolution.y * RESOLUTION_SCALE);
+    targetA1.setSize(bufferWidth, bufferHeight);
+    targetA2.setSize(bufferWidth, bufferHeight);
+    bufferA.uniforms.iResolution.value.set(bufferWidth, bufferHeight, 1);
+    bufferA.uniforms.u_bbMax.value = 0.5 * bufferHeight * 0.5 * bufferHeight;
+    bufferA.uniforms.u_sqrt_res_factor.value = Math.sqrt(bufferWidth / 600.0);
 }
 
 function animate() {
@@ -448,6 +501,14 @@ function animate() {
     // --- Render Buffer A ---
     bufferA.uniforms.iTime.value = elapsedTime;
     bufferA.uniforms.iFrame.value = frame;
+    bufferA.uniforms.u_b.value.set(
+        Math.cos(frame * 0.3),
+        Math.cos(frame * 0.3 - 1.57)
+    );
+    bufferA.uniforms.u_mouseEffect.value.set(
+        0.003 * Math.cos(elapsedTime * 0.3),
+        0.003 * Math.cos(elapsedTime * 0.3 - 1.57)
+    );
     bufferA.uniforms.iChannel0.value = targetA1.texture;
     bufferA.uniforms.iChannel3.value = targetB1.texture; // Use latest Buffer B
     renderer.setRenderTarget(targetA2);
@@ -459,6 +520,7 @@ function animate() {
     scene.children[0].material.uniforms.iChannel0.value = targetA1.texture;
     scene.children[0].material.uniforms.iTime.value = elapsedTime;
     scene.children[0].material.uniforms.u_oscillationEnabled.value = oscillationEnabled ? 1.0 : 0.0;
+    scene.children[0].material.uniforms.u_blendWeight.value = (Math.sin(elapsedTime * (2.0 * Math.PI / 60.0)) + 1.0) / 2.0;
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
 
