@@ -751,7 +751,7 @@ const backgroundShaderSource = `
         // Proper Shadertoy coordinate transformation
         u = 0.2 * (u + u - v) / v.y;
              
-        vec4 z = o = vec4(1,2,3,0);
+        vec4 z = o = vec4(1,2,3,0); // Restore original colorful base
          
         float a = 0.5;
         float t = iTime;
@@ -776,6 +776,23 @@ const backgroundShaderSource = `
                   
          o = 25.6 / (min(o, vec4(13.)) + 164. / o) 
            - dot(u, u) / 250.;
+           
+         // Target only the slow oscillating background, preserve fast electric streaks
+         float maxComponent = max(max(o.r, o.g), o.b);
+         float colorVariation = maxComponent - min(min(o.r, o.g), o.b);
+         
+         // Electric effects have high intensity and high color variation
+         float electricMask = smoothstep(0.4, 1.0, maxComponent) * smoothstep(0.1, 0.5, colorVariation);
+         
+         // Make clouds much darker
+         float gray = dot(o.rgb, vec3(0.299, 0.587, 0.114));
+         vec3 darkClouds = vec3(gray * 0.1); // Much darker clouds (was 0.3, now 0.1)
+         
+         // Boost electric effects brightness
+         vec3 brightElectric = o.rgb * 1.4; // Boost brightness by 40%
+         
+         // Mix: very dark clouds with bright electric effects
+         o.rgb = mix(darkClouds, brightElectric, electricMask);
     }
 
     // The main entry point for the fragment shader
