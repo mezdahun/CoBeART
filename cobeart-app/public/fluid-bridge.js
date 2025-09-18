@@ -53,6 +53,7 @@
     }
 
     let latestFrame = null; // Store the latest frame
+    let latestAudio = null; // Store the latest audio metrics
     const bridgeFramerate = 240; // Target bridge framerate in Hz
 
     // Receive frames emitted by the electron/main.js server and store the latest one
@@ -60,6 +61,9 @@
       if (payload) {
         console.log('[fluid-bridge] received frame', payload);
         latestFrame = payload; // Overwrite with the latest frame
+        if (payload.audio && typeof payload.audio === 'object') {
+          latestAudio = payload.audio;
+        }
         showOverlay();
       }
     });
@@ -70,6 +74,14 @@
       if (latestFrame) {
         const list = Array.isArray(latestFrame.rigidbodies) ? latestFrame.rigidbodies : [];
         let overlayText = '';
+
+        if (latestAudio) {
+          const rms = Number(latestAudio.rms) || 0;
+          const peak = Number(latestAudio.peak) || 0;
+          const zcr = Number(latestAudio.zcr) || 0;
+          const f0 = Number(latestAudio.dominant_frequency) || 0;
+          overlayText += `Audio — RMS: ${rms.toFixed(4)} | Peak: ${peak.toFixed(4)} | ZCR: ${zcr.toFixed(4)} | f0: ${f0.toFixed(1)} Hz<br><br>`;
+        }
         for (const rb of list) {
           const id = Number(rb.ID ?? rb.id ?? 0);
           const x = rb.x || 0;

@@ -25,6 +25,28 @@ function startHttpServer() {
   appx.use(express.static(path.join(__dirname, '..', 'public')));
 
   let lastFrame = null;
+  let lastAudioData = null;
+
+  // STEP 1a: The '/audio' namespace - dedicated channel for audio metrics only
+  const audio = io.of('/audio');
+  audio.on('connection', (socket) => {
+    console.log('[electron] Client connected to /audio');
+
+    // Audio metrics data - updates background state, doesn't drive emissions
+    socket.on('audio_metrics', (audioData) => {
+      if (!audioData || typeof audioData !== 'object') return;
+
+      // Store latest audio data with timestamp
+      lastAudioData = {
+        ...audioData,
+        timestamp: Date.now()
+      };
+    });
+
+    socket.on('disconnect', () => {
+      console.log('[electron] Client disconnected from /audio');
+    });
+  });
 
   // STEP 2: The '/viewer' namespace, for sending data to the front-end.
   // On connection, immediately send the last known data frame to the new client.
@@ -33,15 +55,33 @@ function startHttpServer() {
     if (lastFrame) socket.emit('frame', lastFrame);
   });
 
-  // STEP 1: The '/ingest' namespace, for receiving data from the Python (OptiTrack) client.
-  // Once a client connects, listen for 'frame' events on that connection, store the last frame,
-  // and broadcast it to all current viewers for live updates.
+  // STEP 1b: The '/ingest' namespace - unified ingestion for all data sources (back-compat)
+  // OptiTrack drives the frame rate, audio data is additive
   const ingest = io.of('/ingest');
   ingest.on('connection', (socket) => {
+    console.log('[electron] Client connected to /ingest');
+
+    // OptiTrack frame data - drives the emission rate
     socket.on('frame', (payload) => {
       if (!payload || typeof payload !== 'object') return;
-      lastFrame = payload;
-      viewer.emit('frame', payload);
+
+      // Create combined frame with OptiTrack data + latest audio
+      const combinedFrame = {
+        ...payload,
+        timestamp: Date.now()
+      };
+
+      // Add latest audio data if available
+      if (lastAudioData) {
+        combinedFrame.audio = lastAudioData;
+      }
+
+      lastFrame = combinedFrame;
+      viewer.emit('frame', combinedFrame);
+    });
+
+    socket.on('disconnect', () => {
+      console.log('[electron] Client disconnected from /ingest');
     });
   });
 
