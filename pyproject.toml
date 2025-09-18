@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CoBeArt"
+version = "1.0"
+description = "Audio-visual demonstrator using spatial augmented reality, real-time body tracking and rendering"
+readme = "README.md"
+requires-python = ">=3.6"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "David Mezey & David James"}
+]
+maintainers = [
+    {name = "David Mezey & David James"}
+]
+keywords = ["audio", "visual", "augmented reality", "motion tracking", "optitrack"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "msgpack",
+    "numpy",
+    "scipy",
+    "pyaudio",
+]
+
+[project.optional-dependencies]
+test = [
+    "bandit",
+    "flake8",
+    "pytest",
+    "pytest-cov",
+]
+cobeart = [
+    "opencv-python==4.7.0.72",
+    "matplotlib",
+    "scipy",
+    "pynput",
+    "psutil",
+    "fabric",
+    "tinyflux",
+    "filterpy",
+    "python-socketio[client]",
+]
+
+[project.scripts]
+start-optitrack-client = "cobeart.optitrackclient.start_client:start"
+start-audio-client = "cobeart.audiocapture.capture:main"
+
+[project.urls]
+Homepage = "https://github.com/mezdahun/CoBeART"
+Repository = "https://github.com/mezdahun/CoBeART"
+Issues = "https://github.com/mezdahun/CoBeART/issues"
+
+[tool.setuptools.packages.find]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+cobeart = ["*.txt"]
+
+[tool.setuptools]
+zip-safe = false

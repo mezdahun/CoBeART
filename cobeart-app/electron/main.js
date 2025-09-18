@@ -3,7 +3,7 @@
 // 1. Running a local web and WebSocket server to handle data from the OptiTrack system.
 // 2. Creating a native desktop window (renderer process) that displays the front-end visualization.
 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 
 // The server is run directly within the main process (self-contained)
@@ -25,6 +25,28 @@ function startHttpServer() {
   appx.use(express.static(path.join(__dirname, '..', 'public')));
 
   let lastFrame = null;
+  let lastAudioData = null;
+
+  // STEP 1a: The '/audio' namespace - dedicated channel for audio metrics only
+  const audio = io.of('/audio');
+  audio.on('connection', (socket) => {
+    console.log('[electron] Client connected to /audio');
+
+    // Audio metrics data - updates background state, doesn't drive emissions
+    socket.on('audio_metrics', (audioData) => {
+      if (!audioData || typeof audioData !== 'object') return;
+
+      // Store latest audio data with timestamp
+      lastAudioData = {
+        ...audioData,
+        timestamp: Date.now()
+      };
+    });
+
+    socket.on('disconnect', () => {
+      console.log('[electron] Client disconnected from /audio');
+    });
+  });
 
   // STEP 2: The '/viewer' namespace, for sending data to the front-end.
   // On connection, immediately send the last known data frame to the new client.
@@ -33,15 +55,33 @@ function startHttpServer() {
     if (lastFrame) socket.emit('frame', lastFrame);
   });
 
-  // STEP 1: The '/ingest' namespace, for receiving data from the Python (OptiTrack) client.
-  // Once a client connects, listen for 'frame' events on that connection, store the last frame,
-  // and broadcast it to all current viewers for live updates.
+  // STEP 1b: The '/ingest' namespace - unified ingestion for all data sources (back-compat)
+  // OptiTrack drives the frame rate, audio data is additive
   const ingest = io.of('/ingest');
   ingest.on('connection', (socket) => {
+    console.log('[electron] Client connected to /ingest');
+
+    // OptiTrack frame data - drives the emission rate
     socket.on('frame', (payload) => {
       if (!payload || typeof payload !== 'object') return;
-      lastFrame = payload;
-      viewer.emit('frame', payload);
+
+      // Create combined frame with OptiTrack data + latest audio
+      const combinedFrame = {
+        ...payload,
+        timestamp: Date.now()
+      };
+
+      // Add latest audio data if available
+      if (lastAudioData) {
+        combinedFrame.audio = lastAudioData;
+      }
+
+      lastFrame = combinedFrame;
+      viewer.emit('frame', combinedFrame);
+    });
+
+    socket.on('disconnect', () => {
+      console.log('[electron] Client disconnected from /ingest');
     });
   });
 
@@ -51,7 +91,7 @@ function startHttpServer() {
 }
 
 // Creates and configures the main application window.
-function createWindow() {
+function createWindow(shader, usePerfMode) {
   const win = new BrowserWindow({
     width: 1050,
     height: 1050,
@@ -70,7 +110,14 @@ function createWindow() {
   });
 
   // The window loads its content from the local server, just like a web browser.
-  win.loadURL(`http://127.0.0.1:${PORT}/`);
+  let url = `http://127.0.0.1:${PORT}/`;
+  if (shader === 'molten') {
+    url = `http://127.0.0.1:${PORT}/molten/`;
+    if (usePerfMode) {
+      url += '?performance=true';
+    }
+  }
+  win.loadURL(url);
   win.webContents.on('did-finish-load', () => {
     win.webContents.executeJavaScript(`window.__SOCKET_PORT__=${PORT}`);
   });
@@ -79,11 +126,26 @@ function createWindow() {
 // Electron's initialization is asynchronous. This block executes once the app is ready.
 app.whenReady().then(() => {
   startHttpServer();
-  createWindow();
+
+  const choice = dialog.showMessageBoxSync({
+    type: 'question',
+    buttons: ['Splat', 'Molten'],
+    defaultId: 0,
+    title: 'Choose Visualization',
+    message: 'Which visualization would you like to use?',
+    detail: 'Splat is a fluid simulation. Molten is an alternative.',
+    checkboxLabel: 'Performance Mode (Molten only)',
+    checkboxChecked: false
+  });
+
+  const shader = choice === 0 ? 'splat' : 'molten';
+  const usePerfMode = choice.checkboxChecked;
+
+  createWindow(shader, usePerfMode);
 
   // Handle macOS-specific behavior for re-creating a window.
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(shader, usePerfMode);
   });
 });
 
