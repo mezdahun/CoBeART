@@ -1,6 +1,16 @@
 import numpy as np
+import soundcard as sc
+import warnings
 import time
+import threading
 from cobeart.audiocapture.utils import select_audio_device
+
+# NumPy 2.x compatibility for soundcard backend: redirect deprecated binary fromstring to frombuffer
+try:
+    import soundcard.mediafoundation as _sc_mf  # type: ignore
+    _sc_mf.numpy.fromstring = np.frombuffer  # type: ignore[attr-defined]
+except Exception:
+    pass
 
 class AudioCapturer:
     """A class to capture audio from a user-selected input device."""
@@ -13,9 +23,17 @@ class AudioCapturer:
         """
         self.mic = select_audio_device()
         self.chunk_size = chunk_size
-        self.sample_rate = sample_rate
-        self.recorder = None
+        # Prefer device default samplerate if available to avoid resampling.
+        try:
+            self.sample_rate = sc.default_samplerate()
+        except Exception:
+            self.sample_rate = sample_rate
         self.is_recording = False
+        # Threaded capture state
+        self._stop_event = threading.Event()
+        self._ring = np.zeros(self.chunk_size, dtype=np.float32)
+        self._ring_lock = threading.Lock()
+        self._capture_thread = None
 
     def start_stream(self):
         """Starts the audio recording stream."""
@@ -24,10 +42,39 @@ class AudioCapturer:
             return
         
         print("Audio stream started.")
-        self.recorder = self.mic.recorder(samplerate=self.sample_rate, 
-                                          channels=self.mic.channels, 
-                                          blocksize=self.chunk_size)
-        self.recorder.__enter__()
+        # Reduce warning spam for occasional glitches from the backend.
+        warnings.filterwarnings(
+            "once",
+            message="data discontinuity in recording",
+            module="soundcard.mediafoundation",
+        )
+        # Capture in ~10 ms blocks for stability; maintain a rolling window of chunk_size
+        base10 = int(round(self.sample_rate / 100))  # ~10 ms
+        capture_frames = max(base10, 240)
+        self._stop_event.clear()
+
+        def _capture_loop():
+            try:
+                with self.mic.recorder(
+                    samplerate=self.sample_rate, channels=[0], blocksize=capture_frames
+                ) as recorder:
+                    while not self._stop_event.is_set():
+                        data = recorder.record(numframes=capture_frames)
+                        if data is None:
+                            continue
+                        block = data.reshape(-1)
+                        with self._ring_lock:
+                            n = min(len(block), self.chunk_size)
+                            if n < self.chunk_size:
+                                self._ring[:-n] = self._ring[n:]
+                                self._ring[-n:] = block[:n]
+                            else:
+                                self._ring[:] = block[-self.chunk_size:]
+            except Exception:
+                pass
+
+        self._capture_thread = threading.Thread(target=_capture_loop, name="audio-capture", daemon=True)
+        self._capture_thread.start()
         self.is_recording = True
 
     def stop_stream(self):
@@ -36,18 +83,19 @@ class AudioCapturer:
             print("Stream is not running.")
             return
 
-        self.recorder.__exit__(None, None, None)
+        self._stop_event.set()
+        if self._capture_thread is not None:
+            self._capture_thread.join(timeout=1.0)
+            self._capture_thread = None
         self.is_recording = False
         print("Audio stream stopped.")
 
     def read_chunk(self):
         """Reads a chunk of audio data from the stream."""
-        if not self.is_recording or self.recorder is None:
+        if not self.is_recording:
             return None
-        
-        data = self.recorder.record(numframes=self.chunk_size)
-        # Return the first channel if multi-channel
-        return data[:, 0] if data.ndim > 1 else data
+        with self._ring_lock:
+            return self._ring.copy()
 
     def get_rms(self, data):
         """Calculates the RMS of a chunk of audio data."""
@@ -59,14 +107,24 @@ class AudioCapturer:
 
     def get_zero_crossing_rate(self, data):
         """Calculates the zero-crossing rate of a chunk of audio data."""
-        return np.sum(np.diff(np.signbit(data))) / len(data)
+        # Count sign changes; avoid division by zero on empty input
+        if len(data) == 0:
+            return 0.0
+        return float(np.count_nonzero(np.diff(np.signbit(data)))) / float(len(data))
 
     def get_dominant_frequency(self, data):
         """Calculates the dominant frequency of a chunk of audio data using FFT."""
-        fft_data = np.fft.rfft(data)
-        freqs = np.fft.rfftfreq(len(data), 1 / self.sample_rate)
-        dominant_frequency = freqs[np.argmax(np.abs(fft_data))]
-        return dominant_frequency
+        n = len(data)
+        if n == 0:
+            return 0.0
+        window = np.hanning(n)
+        spectrum = np.fft.rfft(data * window)
+        freqs = np.fft.rfftfreq(n, 1.0 / self.sample_rate)
+        magnitudes = np.abs(spectrum)
+        if magnitudes.size == 0:
+            return 0.0
+        peak_index = int(np.argmax(magnitudes))
+        return float(freqs[peak_index])
 
 def main():
     """Main function to test audio capture and metrics."""

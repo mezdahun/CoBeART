@@ -1,4 +1,14 @@
 import soundcard as sc
+import os
+
+
+def get_socketio_url() -> str:
+    """Return Socket.IO base URL from env or default to local Electron.
+
+    Examples:
+        http://127.0.0.1:3000
+    """
+    return os.getenv("COBEART_SOCKETIO_URL", "http://127.0.0.1:3000")
 
 def select_audio_device():
     """

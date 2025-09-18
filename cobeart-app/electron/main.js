@@ -27,6 +27,27 @@ function startHttpServer() {
   let lastFrame = null;
   let lastAudioData = null;
 
+  // STEP 1a: The '/audio' namespace - dedicated channel for audio metrics only
+  const audio = io.of('/audio');
+  audio.on('connection', (socket) => {
+    console.log('[electron] Client connected to /audio');
+
+    // Audio metrics data - updates background state, doesn't drive emissions
+    socket.on('audio_metrics', (audioData) => {
+      if (!audioData || typeof audioData !== 'object') return;
+
+      // Store latest audio data with timestamp
+      lastAudioData = {
+        ...audioData,
+        timestamp: Date.now()
+      };
+    });
+
+    socket.on('disconnect', () => {
+      console.log('[electron] Client disconnected from /audio');
+    });
+  });
+
   // STEP 2: The '/viewer' namespace, for sending data to the front-end.
   // On connection, immediately send the last known data frame to the new client.
   const viewer = io.of('/viewer');
@@ -34,7 +55,7 @@ function startHttpServer() {
     if (lastFrame) socket.emit('frame', lastFrame);
   });
 
-  // STEP 1: The '/ingest' namespace - unified ingestion for all data sources
+  // STEP 1b: The '/ingest' namespace - unified ingestion for all data sources (back-compat)
   // OptiTrack drives the frame rate, audio data is additive
   const ingest = io.of('/ingest');
   ingest.on('connection', (socket) => {
@@ -57,20 +78,6 @@ function startHttpServer() {
 
       lastFrame = combinedFrame;
       viewer.emit('frame', combinedFrame);
-    });
-
-    // Audio metrics data - updates background state, doesn't drive emissions
-    socket.on('audio_metrics', (audioData) => {
-      if (!audioData || typeof audioData !== 'object') return;
-
-      // Store latest audio data with timestamp
-      lastAudioData = {
-        ...audioData,
-        timestamp: Date.now()
-      };
-
-      // Audio data does NOT trigger frame emission
-      // It will be included in the next OptiTrack-driven frame
     });
 
     socket.on('disconnect', () => {
