@@ -55,6 +55,9 @@
         uniform float uFrictionStrength; // 0..1 how much cellular field slows growth
         uniform float uAnisoStrength;    // 0..1 bias growth along cell gradients
 
+        uniform float uAnimSeconds;  // how long the visual expansion lasts (e.g., 3.0)
+        uniform float uFlipTime;     // absolute time (seconds) when the last flip started
+
         // Hash noise utilities
         float hash(vec2 p){
             float h = sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123;
@@ -123,7 +126,8 @@
             int dominant = uDominant;
             if (uAutoCycle > 0.5) {
                 // Swap dominant every half cycle so it toggles every uCycleSeconds
-                dominant = (cycle < 0.5) ? 0 : 1;
+                float toggle = mod(floor(uTime / max(0.001, uCycleSeconds)), 2.0);
+                dominant = (toggle < 0.5) ? 0 : 1;
             }
 
             float maxR = length(uResolution);
@@ -144,8 +148,8 @@
             float softness = max(1.0, uEdgeSoftness);
 
             // Global cycle envelope to cap how far any seed can grow this cycle
-            float t = (uAutoCycle > 0.5) ? fract(cycle * 2.0) : cycle; // 0..1
-            float e = smoothstep(0.0, 1.0, t);
+            float tAnim = clamp((uTime - uFlipTime) / max(0.001, uAnimSeconds), 0.0, 1.0);
+            float e = smoothstep(0.0, 1.0, tAnim);
             float capRadius = e * maxR;
 
             // Multi-seed union front: 1 outside, 0 inside any grown seed
@@ -216,17 +220,19 @@
             uDominant:     { value: 0 },
             uEdgeSoftness: { value: 30.0 },
             uNoiseAmount:  { value: 0.6 },
-            uCycleSeconds: { value: 10.0 },
+            uCycleSeconds: { value: 12.0 },  // transition in every 12 seconds
             uSeedCount:    { value: 0 },
             uSeeds:        { value: seedArray },
             uSeedSpeed:    { value: 0.9 },
-            uCellScale:       { value: 7.0 },
+            uCellScale:       { value: 6.0 },
             uWarpStrength:    { value: 0.0 },
             uOrganicStrength: { value: 80.0 },
             uBranchAmp:       { value: 0.0 },
             uBranchScale:     { value: 0.0 },
-            uFrictionStrength:{ value: 0.6 },
-            uAnisoStrength:   { value: 0.0 }
+            uFrictionStrength:{ value: 0.8 },
+            uAnisoStrength:   { value: 0.0 },
+            uAnimSeconds:   { value: 3.0 }, // how long the visual expansion lasts (e.g., 3.0)
+            uFlipTime:     { value:  0.0}  // absolute time (seconds) when the last flip started
         };
 
         return new THREE.ShaderMaterial({
