@@ -118,6 +118,8 @@ function createWindow(shader, usePerfMode) {
     }
   } else if (shader === 'ink') {
     url = `http://127.0.0.1:${PORT}/ink/`;
+  } else if (shader === 'mixed') {
+    url = `http://127.0.0.1:${PORT}/composite/`;
   }
   win.loadURL(url);
   win.webContents.on('did-finish-load', () => {
@@ -131,16 +133,16 @@ app.whenReady().then(() => {
 
   const choice = dialog.showMessageBoxSync({
     type: 'question',
-    buttons: ['Splat', 'Molten', 'Ink'],
+    buttons: ['Splat', 'Molten', 'Ink', 'Mixed'],
     defaultId: 0,
     title: 'Choose Visualization',
     message: 'Which visualization would you like to use?',
-    detail: 'Splat is a fluid simulation. Molten is an alternative.',
+    detail: 'Splat: fluid simulation. Molten: reflective shader. Ink: Dark fluid with washed contours. Mixed: spatial blend.',
     checkboxLabel: 'Performance Mode (Molten only)',
     checkboxChecked: false
   });
 
-  const shader = ['splat', 'molten', 'ink'][choice];
+  const shader = ['splat', 'molten', 'ink', 'mixed'][choice];
   const usePerfMode = choice.checkboxChecked;
 
   createWindow(shader, usePerfMode);

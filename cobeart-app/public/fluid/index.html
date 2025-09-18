@@ -201,6 +201,13 @@
 
 <body>
     <canvas></canvas>
+    <script>
+      // Ensure the document is visible even when embedded
+      document.addEventListener('visibilitychange', function(){
+        if (document.hidden) return;
+        try { if (typeof multipleSplats === 'function') multipleSplats(1); } catch(e) {}
+      });
+    </script>
     <script src="./script.js"></script>
 </body>
 

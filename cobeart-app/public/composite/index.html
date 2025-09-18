@@ -1,0 +1,282 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>CoBeArt — Mixed (Composite)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; width: 100%; background: black; overflow: hidden; }
+    canvas { display: block; }
+    /* Keep iframes rendered at full size but invisible and non-interactive */
+    .offscreen {
+      position: fixed;
+      left: 0; top: 0; right: 0; bottom: 0;
+      width: 100vw; height: 100vh;
+      opacity: 0; pointer-events: none; border: 0; z-index: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="./composite.js"></script>
+
+  <!-- Offscreen sources -->
+  <iframe id="fluidFrame" class="offscreen" src="../fluid/index.html"></iframe>
+  <iframe id="moltenFrame" class="offscreen" src="../molten/index.html"></iframe>
+
+  <div id="debug" style="position:fixed;left:8px;top:8px;color:#0f0;font:12px monospace;z-index:10;background:rgba(0,0,0,0.4);padding:6px 8px;border-radius:4px;">init</div>
+
+  <script>
+    (function(){
+      window.addEventListener('error', function(e){
+        const dbg = document.getElementById('debug');
+        if (dbg) dbg.textContent = 'Error: ' + (e && e.message ? e.message : 'unknown');
+      });
+      const fluidFrame = document.getElementById('fluidFrame');
+      const moltenFrame = document.getElementById('moltenFrame');
+
+      let fluidCanvas = null;
+      let moltenCanvas = null;
+      let fluidTex = null;
+      let moltenTex = null;
+
+      let renderer, scene, camera, mesh, material;
+      let initialized = false;
+      let start = performance.now();
+      let cursor = { x: 0.5, y: 0.5 };
+      const debugEl = document.getElementById('debug');
+      // Transition gating state
+      let gateDominant = 0; // matches shader logic: 0 first half, 1 second half
+      let gateLastFlipTime = 0.0; // seconds
+      let seedGateActive = false;
+      let seedEndTime = 0.0; // absolute time when current transition seeding ends
+      // Idle seed: we keep one seed position updated but marked inactive (z<0)
+      let idleSeed = { x: 0.5, y: 0.5 };
+
+      const socket = window.viewerSocket || (window.io ? io('/viewer', { transports: ['websocket'] }) : null);
+      if (socket) {
+        socket.on('frame', () => { /* available if needed later for cursor mapping */ });
+      }
+
+      function makeFallbackTexture(hex) {
+        const c = new THREE.Color(hex);
+        const data = new Uint8Array([
+          Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255), 255
+        ]);
+        const tex = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
+        tex.needsUpdate = true;
+        tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+        return tex;
+      }
+
+      function initThree() {
+        if (!window.THREE) {
+          debugEl.textContent = 'Error: THREE not loaded';
+          return;
+        }
+        if (!window.CompositeShader) {
+          debugEl.textContent = 'Error: CompositeShader not loaded';
+          return;
+        }
+        renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        scene = new THREE.Scene();
+        const plane = new THREE.PlaneBufferGeometry(2, 2);
+
+        const res = new THREE.Vector2();
+        renderer.getDrawingBufferSize(res);
+
+        material = CompositeShader.createMaterial({
+          fluidTexture: makeFallbackTexture(0x2244ff),
+          moltenTexture: makeFallbackTexture(0xff6600),
+          resolution: res
+        });
+
+        mesh = new THREE.Mesh(plane, material);
+        scene.add(mesh);
+        initialized = true;
+
+        window.addEventListener('resize', onResize);
+        window.addEventListener('mousemove', onMouseMove);
+        sizeIframes();
+
+        // Initialize dominant based on current time and cycle
+        const cyc = material.uniforms.uCycleSeconds.value;
+        const et = material.uniforms.uTime.value;
+        const prog = (cyc > 0.0) ? ((et % cyc) / cyc) : 0.0;
+        gateDominant = (prog < 0.5) ? 0 : 1;
+        // Initialize idle seed at current cursor (inactive)
+        setIdleSeed(cursor.x, cursor.y);
+      }
+
+      function onResize() {
+        if (!initialized) return;
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        const size = new THREE.Vector2();
+        renderer.getDrawingBufferSize(size);
+        material.uniforms.uResolution.value.copy(size);
+        sizeIframes();
+      }
+
+      function sizeIframes() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        // Set both element attributes and CSS to ensure contentWindow size
+        [fluidFrame, moltenFrame].forEach(f => {
+          if (!f) return;
+          f.width = w;
+          f.height = h;
+          f.style.width = w + 'px';
+          f.style.height = h + 'px';
+        });
+      }
+
+      function onMouseMove(e) {
+        const x = e.clientX / window.innerWidth;
+        const y = 1.0 - (e.clientY / window.innerHeight);
+        cursor.x = Math.min(Math.max(x, 0), 1);
+        cursor.y = Math.min(Math.max(y, 0), 1);
+        forwardCursor(false);
+        if (seedGateActive) addSeed(cursor.x, cursor.y);
+        else setIdleSeed(cursor.x, cursor.y);
+      }
+      window.addEventListener('mousedown', () => forwardCursor(true));
+      window.addEventListener('mouseup', () => forwardCursor(false, true));
+
+      function forwardCursor(isDown, isUp) {
+        const msg = { type: 'cursor', x: cursor.x, y: cursor.y, down: !!isDown, up: !!isUp };
+        try { fluidFrame.contentWindow && fluidFrame.contentWindow.postMessage(msg, '*'); } catch(_){}
+        try { moltenFrame.contentWindow && moltenFrame.contentWindow.postMessage(msg, '*'); } catch(_){}
+      }
+
+      function tryBindSources() {
+        try {
+          if (!fluidCanvas && fluidFrame.contentWindow && fluidFrame.contentDocument) {
+            const canvases = fluidFrame.contentDocument.getElementsByTagName('canvas');
+            if (canvases && canvases.length) fluidCanvas = canvases[0];
+          }
+        } catch (e) {}
+        try {
+          if (!moltenCanvas && moltenFrame.contentWindow && moltenFrame.contentDocument) {
+            const canvases = moltenFrame.contentDocument.getElementsByTagName('canvas');
+            if (canvases && canvases.length) moltenCanvas = canvases[0];
+          }
+        } catch (e) {}
+
+        if (fluidCanvas && !fluidTex) {
+          fluidTex = new THREE.CanvasTexture(fluidCanvas);
+          fluidTex.minFilter = THREE.LinearFilter;
+          fluidTex.magFilter = THREE.LinearFilter;
+          material.uniforms.uFluid.value = fluidTex;
+        }
+        if (moltenCanvas && !moltenTex) {
+          moltenTex = new THREE.CanvasTexture(moltenCanvas);
+          moltenTex.minFilter = THREE.LinearFilter;
+          moltenTex.magFilter = THREE.LinearFilter;
+          material.uniforms.uMolten.value = moltenTex;
+        }
+        debugEl.textContent = `fluidCanvas:${!!fluidCanvas} moltenCanvas:${!!moltenCanvas} ` +
+                               `fluidTex:${!!fluidTex} moltenTex:${!!moltenTex}`;
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        if (!initialized) { return; }
+        const t = (performance.now() - start) / 1000.0;
+        tryBindSources();
+        if (fluidTex) fluidTex.needsUpdate = true;
+        if (moltenTex) moltenTex.needsUpdate = true;
+        material.uniforms.uTime.value = t;
+        material.uniforms.uCursor.value.set(cursor.x, cursor.y);
+
+        // Update gating: enable seed dropping only right after a dominant flip
+        const cyc = material.uniforms.uCycleSeconds.value;
+        const prog = (cyc > 0.0) ? ((t % cyc) / cyc) : 0.0;
+        const auto = material.uniforms.uAutoCycle.value > 0.5;
+        const dom = auto ? ((prog < 0.5) ? 0 : 1) : material.uniforms.uDominant.value;
+        if (dom !== gateDominant) {
+          gateDominant = dom;
+          gateLastFlipTime = t;
+          startTransitionSeeds(t);
+          if (auto) {
+            const halfRemaining = (dom === 0 ? (0.5 - prog) : (1.0 - prog));
+            seedEndTime = t + Math.max(0.0, halfRemaining) * cyc;
+          } else {
+            // If manual, leave a generous window; user can flip again
+            seedEndTime = t + 9999.0;
+          }
+        }
+        if (seedGateActive && t >= seedEndTime) endTransitionSeeds();
+
+        renderer.render(scene, camera);
+      }
+
+      function addSeed(nx, ny) {
+        if (!material) return;
+        const count = material.uniforms.uSeedCount.value;
+        const MAX = 64;
+        const now = material.uniforms.uTime.value;
+        if (count < MAX) {
+          const arr = material.uniforms.uSeeds.value;
+          arr[count].set(nx, ny, now);
+          material.uniforms.uSeedCount.value = count + 1;
+        } else {
+          // Overwrite the oldest by shifting birth times forward (simple ring buffer)
+          const arr = material.uniforms.uSeeds.value;
+          for (let i = 1; i < MAX; i++) arr[i - 1].copy(arr[i]);
+          arr[MAX - 1].set(nx, ny, now);
+        }
+      }
+
+      function clearSeeds() {
+        if (!material) return;
+        material.uniforms.uSeedCount.value = 0;
+      }
+
+      function setIdleSeed(nx, ny) {
+        if (!material) return;
+        const arr = material.uniforms.uSeeds.value;
+        // Keep an inactive seed at index 0 with z<0 so shader ignores it
+        arr[0].set(nx, ny, -1.0);
+        idleSeed.x = nx; idleSeed.y = ny;
+      }
+
+      function startTransitionSeeds(now) {
+        seedGateActive = true;
+        clearSeeds();
+        // First seed at current cursor, active
+        addSeed(cursor.x, cursor.y);
+      }
+
+      function endTransitionSeeds() {
+        seedGateActive = false;
+        clearSeeds();
+        // Leave only the idle tracker (inactive)
+        setIdleSeed(cursor.x, cursor.y);
+      }
+
+      // Wait a tick to let iframes begin loading
+      window.addEventListener('load', function(){
+        initThree();
+        // Assist binding by listening for iframe load as well
+        fluidFrame.addEventListener('load', tryBindSources);
+        moltenFrame.addEventListener('load', tryBindSources);
+        // Nudge fluid to start with a few splats (same as its GUI quickstart)
+        try { fluidFrame.contentWindow && fluidFrame.contentWindow.postMessage({ type: 'splat', x: 0.5, y: 0.5, id: 0, color: [1, 0.5, 0.2] }, '*'); } catch(_){}
+        try { fluidFrame.contentWindow && fluidFrame.contentWindow.postMessage({ type: 'splat', x: 0.25, y: 0.6, id: 1, color: [0.2, 0.6, 1.0] }, '*'); } catch(_){}
+        animate();
+      });
+    })();
+  </script>
+</body>
+
+</html>
+
+

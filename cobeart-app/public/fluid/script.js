@@ -1771,6 +1771,23 @@ window.addEventListener('touchend', e => {
     }
 });
 
+// Accept cursor events from composite parent
+window.addEventListener('message', (e) => {
+    const m = e.data;
+    if (!m || m.type !== 'cursor') return;
+    const px = m.x * canvas.width;
+    const py = (1.0 - m.y) * canvas.height;
+    const pointer = pointers[0] || new pointerPrototype();
+    if (m.down) {
+        updatePointerDownData(pointer, -1, px, py);
+        if (!pointers.includes(pointer)) pointers[0] = pointer;
+    } else if (m.up) {
+        updatePointerUpData(pointer);
+    } else {
+        updatePointerMoveData(pointer, px, py);
+    }
+});
+
 window.addEventListener('keydown', e => {
     if (e.code === 'KeyP')
         config.PAUSED = !config.PAUSED;

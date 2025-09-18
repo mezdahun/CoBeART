@@ -512,6 +512,26 @@ function init() {
         iMouseTarget.set(0, 0, 0, 0);
     });
 
+    // Accept cursor events from composite parent
+    window.addEventListener('message', (e) => {
+        const m = e.data;
+        if (!m || m.type !== 'cursor') return;
+        const pixelRatio = window.devicePixelRatio;
+        const x = m.x * window.innerWidth * pixelRatio;
+        const y = m.y * window.innerHeight * pixelRatio;
+        if (m.down) {
+            iJustClickedArray[0] = 1.0;
+            iMouseArray[0].set(x, y, x, y);
+            iMouseTarget.copy(iMouseArray[0]);
+        } else if (m.up) {
+            iMouseArray[0].set(0, 0, 0, 0);
+            iMouseTarget.set(0, 0, 0, 0);
+        } else {
+            iMouseTarget.x = x;
+            iMouseTarget.y = y;
+        }
+    });
+
     document.addEventListener('keydown', (e) => {
         if (e.key.toLowerCase() === 'i') {
             bufferA.uniforms.keyI.value = 1.0;
