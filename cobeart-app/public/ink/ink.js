@@ -1,3 +1,29 @@
+// Entity management for multiple inputs
+const MAX_BODIES = 10;
+let trackedEntities = {};
+let iMouseArray = [];
+for (let i = 0; i < MAX_BODIES; i++) {
+    iMouseArray.push({ x: 0, y: 0, z: 0, w: 0 });
+}
+let iMouseTarget = { x: 0, y: 0, z: 0, w: 0 };
+
+// Constants from molten shader
+const STATIONARY_VELOCITY_THRESHOLD = 50;
+const STATIONARY_TIMEOUT = 200;
+const MOUSE_SMOOTHING = 0.2;
+
+function cleanupEntities() {
+    const now = Date.now();
+    for (const id in trackedEntities) {
+        if (now - trackedEntities[id].lastSeen > 2000) {
+            const entity = trackedEntities[id];
+            if (entity.iMouse.x === 0 && entity.iMouse.y === 0 && entity.iMouse.z === 0 && entity.iMouse.w === 0) {
+                delete trackedEntities[id];
+            }
+        }
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('gl-canvas');
     const regl = createREGL({
@@ -35,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     uniform float iTimeDelta;
     uniform vec3 iResolution;
     uniform vec4 iMouse;
+    uniform vec4 iMouseArray[${MAX_BODIES}];
     uniform sampler2D iChannel0; // rgba-noise-volume (3D volume packed as 2D atlas)
     uniform sampler2D iChannel1; // previous frame
 
@@ -43,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Liquid toy by Leon Denise 2022-05-18
     // Playing with shading with a fake fluid heightmap
     // Updated to use 3D volume texture sampling
+    // Modified to support multiple input sources
 
     const float speed = .01;
     const float scale = .1;
@@ -91,12 +119,26 @@ document.addEventListener('DOMContentLoaded', () => {
         // noise: animate z over time for volumetric look
         vec3 spice = fbm(vec3(uv*scale, iTime*speed));
         
-        // draw circle at mouse or in motion
-        float t = iTime*2.;
-        vec2 mouse = (iMouse.xy - iResolution.xy / 2.)/iResolution.y;
-        if (iMouse.z > .5) uv -= mouse;
-        else uv -= vec2(cos(t),sin(t))*.3;
-        float paint = trace(length(uv),.1);
+        // draw circles for multiple inputs
+        float paint = 0.;
+        bool anyMouseActive = false;
+        
+        // Check all tracked entities
+        for (int i = 0; i < ${MAX_BODIES}; i++) {
+            if (iMouseArray[i].z > 0.5) {
+                anyMouseActive = true;
+                vec2 mouse = (iMouseArray[i].xy - iResolution.xy / 2.)/iResolution.y;
+                vec2 localUV = uv - mouse; // Use minus like original
+                paint = max(paint, trace(length(localUV), .1));
+            }
+        }
+        
+        // Fallback to animated circle if no mouse active
+        if (!anyMouseActive) {
+            float t = iTime*2.;
+            vec2 animatedUV = uv + vec2(cos(t),sin(t))*.3;
+            paint = trace(length(animatedUV),.1);
+        }
         
         // expansion
         vec2 offset = vec2(0);
@@ -132,6 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
     uniform float iTime;
     uniform vec3 iResolution;
     uniform vec4 iMouse;
+    uniform vec4 iMouseArray[${MAX_BODIES}];
     uniform sampler2D iChannel0; // buffer A
     uniform sampler2D iChannel1; // dither/noise (blue noise)
 
@@ -183,8 +226,15 @@ document.addEventListener('DOMContentLoaded', () => {
         background *= smoothstep(1.5,-.5,length(uv-.5));
         color = mix(background, clamp(color, 0., 1.), ss(.01,.1,gray));
         
-        // display layers when clic
-        if (iMouse.z > 0.5 && iMouse.x/iResolution.x < .1)
+        // display layers when any mouse is clicked in left edge
+        bool showDebug = false;
+        for (int i = 0; i < ${MAX_BODIES}; i++) {
+            if (iMouseArray[i].z > 0.5 && iMouseArray[i].x/iResolution.x < .1) {
+                showDebug = true;
+                break;
+            }
+        }
+        if (showDebug)
         {
             if (uv.x < .33) color = vec3(gray);
             else if (uv.x < .66) color = normal*.5+.5;
@@ -221,14 +271,39 @@ document.addEventListener('DOMContentLoaded', () => {
     fetch('textures/rgba-noise-volume.bin')
         .then(response => response.arrayBuffer())
         .then(buffer => {
-            // 32x32x32 volume, 4 channels, uint8
-            const data = new Uint8Array(buffer);
-            const size = 32;
+            // Parse the BIN header format
+            const view = new DataView(buffer);
+            const magic = new TextDecoder().decode(new Uint8Array(buffer, 0, 3));
 
-            // Check if we have the expected data size
+            let data, size;
+            if (magic === 'BIN') {
+                // Parse BIN header: "BIN\0" + width + height + depth + channels (all uint32 little-endian)
+                const width = view.getUint32(4, true);
+                const height = view.getUint32(8, true);
+                const depth = view.getUint32(12, true);
+                const channels = view.getUint32(16, true);
+
+                console.log(`BIN volume texture: ${width}x${height}x${depth}, ${channels} channels`);
+
+                if (width === height && height === depth) {
+                    size = width;
+                    data = new Uint8Array(buffer, 20); // Skip 20-byte header
+                } else {
+                    console.warn('Non-cubic volume texture not supported, falling back to defaults');
+                    size = 32;
+                    data = new Uint8Array(buffer, 20);
+                }
+            } else {
+                // Legacy format: raw data without header
+                console.log('Raw volume texture (no header)');
+                size = 32;
+                data = new Uint8Array(buffer);
+            }
+
+            // Verify data size
             const expectedSize = size * size * size * 4;
             if (data.length !== expectedSize) {
-                console.warn(`Volume texture size mismatch. Expected ${expectedSize}, got ${data.length}`);
+                console.warn(`Volume data size mismatch. Expected ${expectedSize}, got ${data.length}`);
             }
 
             // Create a seamless tileable 2D texture from the volume data
@@ -373,6 +448,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 iResolution: ({ viewportWidth, viewportHeight }) => [viewportWidth, viewportHeight, 1],
                 iMouse: () => [mouse.x, mouse.y, mouse.z, mouse.w],
+                iMouseArray: () => {
+                    const flatArray = [];
+                    for (let i = 0; i < MAX_BODIES; i++) {
+                        flatArray.push(iMouseArray[i].x, iMouseArray[i].y, iMouseArray[i].z, iMouseArray[i].w);
+                    }
+                    return flatArray;
+                },
                 iChannel0: volumeNoiseTexture,
                 iChannel1: ({ tick }) => fbos[tick % 2]
             },
@@ -391,6 +473,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 iTime: ({ time }) => time,
                 iResolution: ({ viewportWidth, viewportHeight }) => [viewportWidth, viewportHeight, 1],
                 iMouse: () => [mouse.x, mouse.y, mouse.z, mouse.w],
+                iMouseArray: () => {
+                    const flatArray = [];
+                    for (let i = 0; i < MAX_BODIES; i++) {
+                        flatArray.push(iMouseArray[i].x, iMouseArray[i].y, iMouseArray[i].z, iMouseArray[i].w);
+                    }
+                    return flatArray;
+                },
                 iChannel0: ({ tick }) => fbos[(tick + 1) % 2],
                 iChannel1: blueNoiseTexture
             },
@@ -399,6 +488,42 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         regl.frame(() => {
+            // Clean up old entities
+            cleanupEntities();
+
+            // Smoothly interpolate mouse positions towards targets
+            mouse.x += (iMouseTarget.x - mouse.x) * MOUSE_SMOOTHING;
+            mouse.y += (iMouseTarget.y - mouse.y) * MOUSE_SMOOTHING;
+            mouse.z = iMouseTarget.z;
+            mouse.w = iMouseTarget.w;
+
+            // Put local mouse in slot 0
+            iMouseArray[0] = {
+                x: mouse.x,
+                y: mouse.y,
+                z: mouse.z,
+                w: mouse.w
+            };
+
+
+            // Update all tracked entities
+            for (const id in trackedEntities) {
+                const entity = trackedEntities[id];
+                entity.iMouse.x += (entity.iMouseTarget.x - entity.iMouse.x) * MOUSE_SMOOTHING;
+                entity.iMouse.y += (entity.iMouseTarget.y - entity.iMouse.y) * MOUSE_SMOOTHING;
+                entity.iMouse.z = entity.iMouseTarget.z;
+                entity.iMouse.w = entity.iMouseTarget.w;
+
+                if (entity.index >= 0 && entity.index < MAX_BODIES) {
+                    iMouseArray[entity.index] = {
+                        x: entity.iMouse.x,
+                        y: entity.iMouse.y,
+                        z: entity.iMouse.z,
+                        w: entity.iMouse.w
+                    };
+                }
+            }
+
             drawBufferA();
             drawImage();
         });
@@ -406,11 +531,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Mouse handling
     const mouse = { x: 0, y: 0, z: 0, w: 0 };
-    window.addEventListener('mousedown', () => mouse.z = 1);
-    window.addEventListener('mouseup', () => mouse.z = 0);
+    window.addEventListener('mousedown', (event) => {
+        iMouseTarget.z = 1;
+        iMouseTarget.w = 1;
+    });
+    window.addEventListener('mouseup', () => {
+        iMouseTarget.z = 0;
+        iMouseTarget.w = 0;
+    });
     window.addEventListener('mousemove', (event) => {
-        mouse.x = event.clientX;
-        mouse.y = canvas.height - event.clientY; // flip Y
+        iMouseTarget.x = event.clientX;
+        iMouseTarget.y = canvas.height - event.clientY; // flip Y
     });
 
     // Socket.io connection
@@ -418,8 +549,93 @@ document.addEventListener('DOMContentLoaded', () => {
     const socket = io(`http://127.0.0.1:${PORT}/viewer`, { transports: ['websocket'] });
     socket.on('connect', () => console.log('[ink] Connected to /viewer'));
     socket.on('frame', (payload) => {
-        // This shader does not use incoming data, but we keep the connection.
-        // console.log('Received frame data:', payload);
+        if (!payload || !payload.rigidbodies) return;
+
+        const seenIds = new Set();
+
+        for (const rb of payload.rigidbodies) {
+            seenIds.add(rb.ID);
+
+            if (!trackedEntities[rb.ID]) {
+                let newIndex = -1;
+                const usedIndices = Object.values(trackedEntities).map(e => e.index);
+                for (let i = 1; i < MAX_BODIES; i++) {
+                    if (!usedIndices.includes(i)) {
+                        newIndex = i;
+                        break;
+                    }
+                }
+
+                if (newIndex === -1) {
+                    console.log("Max number of tracked bodies reached.");
+                    continue;
+                }
+
+                trackedEntities[rb.ID] = {
+                    id: rb.ID,
+                    index: newIndex,
+                    iMouse: { x: 0, y: 0, z: 0, w: 0 },
+                    iMouseTarget: { x: 0, y: 0, z: 0, w: 0 },
+                    lastSeen: Date.now(),
+                    stationaryTimer: null,
+                    timeoutTimer: null,
+                };
+            }
+
+            const entity = trackedEntities[rb.ID];
+            entity.lastSeen = Date.now();
+            if (entity.timeoutTimer) clearTimeout(entity.timeoutTimer);
+
+            const absVel = Math.sqrt(rb.vx * rb.vx + rb.vy * rb.vy);
+
+            if (absVel < STATIONARY_VELOCITY_THRESHOLD) {
+                if (!entity.stationaryTimer) {
+                    entity.stationaryTimer = setTimeout(() => {
+                        entity.iMouseTarget.x = 0;
+                        entity.iMouseTarget.y = 0;
+                        entity.iMouseTarget.z = 0;
+                        entity.iMouseTarget.w = 0;
+                        entity.stationaryTimer = null;
+                    }, STATIONARY_TIMEOUT);
+                }
+            } else {
+                if (entity.stationaryTimer) {
+                    clearTimeout(entity.stationaryTimer);
+                    entity.stationaryTimer = null;
+                }
+
+                const arena_x = 3000;
+                const arena_y = 3000;
+                const norm_x = (-rb.x + arena_x) / (2 * arena_x);
+                const norm_y = (rb.y + arena_y) / (2 * arena_y);
+                const screenX = norm_x * window.innerWidth;
+                const screenY = (1.0 - norm_y) * window.innerHeight;
+
+                if (entity.iMouseTarget.z === 0 && entity.iMouseTarget.w === 0) {
+                    entity.iMouse.x = screenX;
+                    entity.iMouse.y = screenY;
+                }
+
+                entity.iMouseTarget.x = screenX;
+                entity.iMouseTarget.y = screenY;
+                entity.iMouseTarget.z = screenX;
+                entity.iMouseTarget.w = screenY;
+            }
+        }
+
+        for (const id in trackedEntities) {
+            if (!seenIds.has(parseInt(id, 10))) {
+                const entity = trackedEntities[id];
+                if (!entity.timeoutTimer) {
+                    entity.timeoutTimer = setTimeout(() => {
+                        entity.iMouseTarget.x = 0;
+                        entity.iMouseTarget.y = 0;
+                        entity.iMouseTarget.z = 0;
+                        entity.iMouseTarget.w = 0;
+                    }, 100);
+                }
+            }
+        }
     });
     socket.on('disconnect', () => console.log('[ink] Disconnected from /viewer'));
 
