@@ -210,29 +210,30 @@
         const MAX_SEEDS = 64;
         const seedArray = new Array(MAX_SEEDS).fill(0).map(() => new THREE.Vector3(-1, -1, -1));
 
+        // Main parameters of the transition animation
         const uniforms = {
-            uFluid:        { value: opts.fluidTexture || null },
-            uMolten:       { value: opts.moltenTexture || null },
-            uResolution:   { value: opts.resolution || new THREE.Vector2(1920, 1080) },
-            uTime:         { value: 0.0 },
-            uCursor:       { value: new THREE.Vector2(0.5, 0.5) },
-            uAutoCycle:    { value: 1.0 },
-            uDominant:     { value: 0 },
-            uEdgeSoftness: { value: 30.0 },
-            uNoiseAmount:  { value: 0.6 },
-            uCycleSeconds: { value: 12.0 },  // transition in every 12 seconds
-            uSeedCount:    { value: 0 },
-            uSeeds:        { value: seedArray },
-            uSeedSpeed:    { value: 0.9 },
-            uCellScale:       { value: 6.0 },
-            uWarpStrength:    { value: 0.0 },
-            uOrganicStrength: { value: 80.0 },
-            uBranchAmp:       { value: 0.0 },
-            uBranchScale:     { value: 0.0 },
-            uFrictionStrength:{ value: 0.8 },
-            uAnisoStrength:   { value: 0.0 },
-            uAnimSeconds:   { value: 3.0 }, // how long the visual expansion lasts (e.g., 3.0)
-            uFlipTime:     { value:  0.0}  // absolute time (seconds) when the last flip started
+            uFluid:        { value: opts.fluidTexture || null }, // Texture for fluid layer
+            uMolten:       { value: opts.moltenTexture || null }, // Texture for molten layer
+            uResolution:   { value: opts.resolution || new THREE.Vector2(1920, 1080) }, // Render resolution
+            uTime:         { value: 0.0 }, // Animation time in seconds
+            uCursor:       { value: new THREE.Vector2(0.5, 0.5) }, // Cursor position (normalized)
+            uAutoCycle:    { value: 1.0 }, // Enable AUTOMATIC cycling between layers
+            uDominant:     { value: 0 }, // Which layer is currently dominant
+            uEdgeSoftness: { value: 30.0 }, // Softness of the transition edge in pixels
+            uNoiseAmount:  { value: 0.6 }, // Amount of noise in the edge
+            uCycleSeconds: { value: 12.0 }, // Duration of each transition cycle in seconds
+            uSeedCount:    { value: 0 }, // Number of active seeds for transition
+            uSeeds:        { value: seedArray }, // Array of seed positions and birth times
+            uSeedSpeed:    { value: 0.9 }, // Speed at which seeds expand
+            uCellScale:       { value: 6.0 }, // Scale of cellular noise for organic edge
+            uWarpStrength:    { value: 0.0 }, // Strength of domain warping
+            uOrganicStrength: { value: 80.0 }, // Amplitude of organic edge distortion
+            uBranchAmp:       { value: 0.0 }, // Amplitude of directional branching
+            uBranchScale:     { value: 0.0 }, // Scale of angular noise for branching
+            uFrictionStrength:{ value: 0.8 }, // Friction strength for seed growth
+            uAnisoStrength:   { value: 0.0 }, // Anisotropy strength for growth direction
+            uAnimSeconds:   { value: 3.0 }, // Duration of the visual expansion animation
+            uFlipTime:     { value:  0.0}  // Time when the last flip started
         };
 
         return new THREE.ShaderMaterial({
@@ -247,6 +248,313 @@
 
     // Expose to global namespace
     global.CompositeShader = CompositeShader;
+
+    // MAin Logic
+//    window.addEventListener('error', function(e){
+//        const dbg = document.getElementById('debug');
+//        if (dbg) dbg.textContent = 'Error: ' + (e && e.message ? e.message : 'unknown');
+//      });
+
+    // Helper to set iframe visibility if debug and interactive elements are desired  
+    function setFrameVisibility(frame, visible) {
+        if (visible) {
+          frame.style.opacity = '1';
+          frame.style.pointerEvents = 'auto';
+        } else {
+          frame.style.opacity = '0';
+          frame.style.pointerEvents = 'none';
+        }
+      }
+
+      // Running on load
+      window.addEventListener('load', function(){
+        // Getting Elements
+        const fluidFrame = document.getElementById('fluidFrame');
+        const moltenFrame = document.getElementById('moltenFrame');
+        //const debugEl = document.getElementById('debug');
+
+        // Sources and textures
+        let fluidCanvas = null;
+        let moltenCanvas = null;
+        let fluidTex = null;
+        let moltenTex = null;
+
+        // Three.js state
+        let renderer, scene, camera, mesh, material;
+        let initialized = false;
+        let start = performance.now();
+        let cursor = { x: 0.5, y: 0.5 };
+
+        // Transition gating state
+        // If true, we not only use the canvas visualizations, but
+        // we place in the whole index.html of the active one after the animation
+        // SET TO FALSE FOR PRODUCTION, ONLY DEBUG, makes slight jump before transition
+        let showInteractiveElements = true;
+
+        // Seed mgmt and transition parameters
+        let gateDominant = 0; // matches shader logic: 0 first half, 1 second half
+        let gateLastFlipTime = 0.0; // seconds
+        let seedGateActive = false;
+        let seedEndTime = 0.0; // absolute time when current transition seeding ends
+        // Idle seed: we keep one seed position updated but marked inactive (z<0)
+        let idleSeed = { x: 0.5, y: 0.5 };
+
+        // Functional code upon packages on socket
+        // Listening on viewer namespace
+        const socket = window.viewerSocket || (window.io ? io('/viewer', { transports: ['websocket'] }) : null);
+
+        // Arena size
+        const arena = { x: 3000, y: 3000 };
+
+        // Next seed position
+        var nx = 0;
+        var ny = 0;
+
+        if (socket) {
+            socket.on('frame', (payload) => {
+            if (!payload || !payload.rigidbodies) return;
+
+            // If you want the composite shader’s edge to grow from bodies,
+            // keep seeding while the gate is active:
+            const wantSeeds = seedGateActive;
+
+            // Use the first body (if any) to drive the parent “cursor”
+            // so molten reacts immediately; fluid receives splats for ALL bodies.
+            const first = payload.rigidbodies[0];
+
+            for (const rb of payload.rigidbodies) {
+
+                // TODO: divide on which rigid body to track for the transition animation and when to trigger
+                nx = (-rb.x + arena.x) / (2 * arena.x);
+                ny = ( rb.y + arena.y) / (2 * arena.y);
+                console.log(`rb ${rb.ID} pos ${rb.x.toFixed(1)},${rb.y.toFixed(1)} => norm ${nx.toFixed(2)},${ny.toFixed(2)}`);
+
+                // For the transition animation we add seeds at the body position so that the
+                // transition keeps following the tracked object
+                if (wantSeeds) {
+                    if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+                        if (seedGateActive) addSeed(nx, 1-ny);
+                    };
+                }
+            }
+            });
+        }
+
+        function makeFallbackTexture(hex) {
+            const c = new THREE.Color(hex);
+            const data = new Uint8Array([
+            Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255), 255
+            ]);
+            const tex = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
+            tex.needsUpdate = true;
+            tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+            return tex;
+        }
+
+        function initThree() {
+//            if (!window.THREE) {
+//            debugEl.textContent = 'Error: THREE not loaded';
+//            return;
+//            }
+//            if (!window.CompositeShader) {
+//            debugEl.textContent = 'Error: CompositeShader not loaded';
+//            return;
+//            }
+            renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            scene = new THREE.Scene();
+            const plane = new THREE.PlaneBufferGeometry(2, 2);
+
+            const res = new THREE.Vector2();
+            renderer.getDrawingBufferSize(res);
+
+            material = CompositeShader.createMaterial({
+            fluidTexture: makeFallbackTexture(0x2244ff),
+            moltenTexture: makeFallbackTexture(0xff6600),
+            resolution: res
+            });
+
+            mesh = new THREE.Mesh(plane, material);
+            scene.add(mesh);
+            initialized = true;
+
+            window.addEventListener('resize', onResize);
+            //window.addEventListener('mousemove', onMouseMove);
+            sizeIframes();
+
+            // Initialize dominant based on current time and cycle
+            const cyc = material.uniforms.uCycleSeconds.value;
+            const et = material.uniforms.uTime.value;
+            const prog = (cyc > 0.0) ? ((et % cyc) / cyc) : 0.0;
+            gateDominant = (prog < 0.5) ? 0 : 1;
+            // Initialize idle seed at current cursor (inactive)
+            //setIdleSeed(cursor.x, cursor.y);
+        }
+
+        function onResize() {
+            if (!initialized) return;
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            const size = new THREE.Vector2();
+            renderer.getDrawingBufferSize(size);
+            material.uniforms.uResolution.value.copy(size);
+            sizeIframes();
+        }
+
+        function sizeIframes() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            // Set both element attributes and CSS to ensure contentWindow size
+            [fluidFrame, moltenFrame].forEach(f => {
+            if (!f) return;
+            f.width = w;
+            f.height = h;
+            f.style.width = w + 'px';
+            f.style.height = h + 'px';
+            });
+        }
+
+        function tryBindSources() {
+            try {
+            if (!fluidCanvas && fluidFrame.contentWindow && fluidFrame.contentDocument) {
+                const canvases = fluidFrame.contentDocument.getElementsByTagName('canvas');
+                if (canvases && canvases.length) fluidCanvas = canvases[0];
+            }
+            } catch (e) {}
+            try {
+            if (!moltenCanvas && moltenFrame.contentWindow && moltenFrame.contentDocument) {
+                const canvases = moltenFrame.contentDocument.getElementsByTagName('canvas');
+                if (canvases && canvases.length) moltenCanvas = canvases[0];
+            }
+            } catch (e) {}
+
+            if (fluidCanvas && !fluidTex) {
+            fluidTex = new THREE.CanvasTexture(fluidCanvas);
+            fluidTex.minFilter = THREE.LinearFilter;
+            fluidTex.magFilter = THREE.LinearFilter;
+            material.uniforms.uFluid.value = fluidTex;
+            }
+            if (moltenCanvas && !moltenTex) {
+            moltenTex = new THREE.CanvasTexture(moltenCanvas);
+            moltenTex.minFilter = THREE.LinearFilter;
+            moltenTex.magFilter = THREE.LinearFilter;
+            material.uniforms.uMolten.value = moltenTex;
+            }
+//            debugEl.textContent = `fluidCanvas:${!!fluidCanvas} moltenCanvas:${!!moltenCanvas} ` +
+//                                `fluidTex:${!!fluidTex} moltenTex:${!!moltenTex}`;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (!initialized) { return; }
+            const t = (performance.now() - start) / 1000.0;
+            tryBindSources();
+            if (fluidTex) fluidTex.needsUpdate = true;
+            if (moltenTex) moltenTex.needsUpdate = true;
+            material.uniforms.uTime.value = t;
+            material.uniforms.uCursor.value.set(cursor.x, cursor.y);
+
+            // Update gating: enable seed dropping only right after a dominant flip
+            const cyc  = material.uniforms.uCycleSeconds.value;
+            const auto = material.uniforms.uAutoCycle.value > 0.5;
+
+            // Toggle dominant once per full cycle:
+            const dom = auto
+            ? ((Math.floor(t / Math.max(0.001, cyc)) % 2) === 0 ? 0 : 1)
+            : material.uniforms.uDominant.value;
+
+            if (dom !== gateDominant) {
+            // First we remobe the visibility of the iframe such that we can see the animation
+            // this will remove interactive elements from view
+            if (gateDominant === 1) {
+                setFrameVisibility(fluidFrame, false); // Hide fluidFrame
+            } else {
+                setFrameVisibility(moltenFrame, false); // Hide moltenFrame
+            }
+
+            gateDominant = dom;
+            gateLastFlipTime = t;
+
+            // tell the shader when the flip started
+            material.uniforms.uFlipTime.value = t;
+
+            // open a seeding window that matches the visual ramp
+            startTransitionSeeds(t);
+            seedEndTime = t + material.uniforms.uAnimSeconds.value;
+            }
+            if (seedGateActive && t >= seedEndTime) {
+            endTransitionSeeds();
+            if (gateDominant === 1) {
+                setFrameVisibility(fluidFrame, true);  // Show fluidFrame
+                setFrameVisibility(moltenFrame, false); // Hide moltenFrame
+            } else {
+                setFrameVisibility(fluidFrame, false); // Hide fluidFrame
+                setFrameVisibility(moltenFrame, true);  // Show moltenFrame
+            }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function addSeed(nx, ny) {
+            if (!material) return;
+            const count = material.uniforms.uSeedCount.value;
+            const MAX = 300;
+            const now = material.uniforms.uTime.value;
+            if (count < MAX) {
+            const arr = material.uniforms.uSeeds.value;
+            arr[count].set(nx, ny, now);
+            material.uniforms.uSeedCount.value = count + 1;
+            } else {
+            // Overwrite the oldest by shifting birth times forward (simple ring buffer)
+            const arr = material.uniforms.uSeeds.value;
+            for (let i = 1; i < MAX; i++) arr[i - 1].copy(arr[i]);
+            arr[MAX - 1].set(nx, ny, now);
+            }
+            console.log(`addSeed ${nx.toFixed(2)},${ny.toFixed(2)} count=${material.uniforms.uSeedCount.value}`);
+        }
+
+        function clearSeeds() {
+            if (!material) return;
+            material.uniforms.uSeedCount.value = 0;
+        }
+
+        function setIdleSeed(nx, ny) {
+            if (!material) return;
+            const arr = material.uniforms.uSeeds.value;
+            // Keep an inactive seed at index 0 with z<0 so shader ignores it
+            arr[0].set(nx, ny, -1.0);
+            idleSeed.x = nx; idleSeed.y = ny;
+        }
+
+        function startTransitionSeeds(now) {
+            seedGateActive = true;
+            clearSeeds();
+            // First seed at current cursor, active
+            //addSeed(cursor.x, cursor.y);
+        }
+
+        function endTransitionSeeds() {
+            seedGateActive = false;
+            clearSeeds();
+            // Leave only the idle tracker (inactive)
+            //setIdleSeed(cursor.x, cursor.y);
+        }
+
+        initThree();
+        // Assist binding by listening for iframe load as well
+        fluidFrame.addEventListener('load', tryBindSources);
+        moltenFrame.addEventListener('load', tryBindSources);
+
+        // Nudge fluid to start with a few splats (same as its GUI quickstart)
+        try { fluidFrame.contentWindow && fluidFrame.contentWindow.postMessage({ type: 'splat', x: 0.5, y: 0.5, id: 0, color: [1, 0.5, 0.2] }, '*'); } catch(_){}
+        try { fluidFrame.contentWindow && fluidFrame.contentWindow.postMessage({ type: 'splat', x: 0.25, y: 0.6, id: 1, color: [0.2, 0.6, 1.0] }, '*'); } catch(_){}
+        animate();
+      });
+
 })(window);
 
 
