@@ -116,6 +116,8 @@ function createWindow(shader, usePerfMode) {
     if (usePerfMode) {
       url += '?performance=true';
     }
+  } else if (shader === 'ink') {
+    url = `http://127.0.0.1:${PORT}/ink/`;
   }
   win.loadURL(url);
   win.webContents.on('did-finish-load', () => {
@@ -129,7 +131,7 @@ app.whenReady().then(() => {
 
   const choice = dialog.showMessageBoxSync({
     type: 'question',
-    buttons: ['Splat', 'Molten'],
+    buttons: ['Splat', 'Molten', 'Ink'],
     defaultId: 0,
     title: 'Choose Visualization',
     message: 'Which visualization would you like to use?',
@@ -138,7 +140,7 @@ app.whenReady().then(() => {
     checkboxChecked: false
   });
 
-  const shader = choice === 0 ? 'splat' : 'molten';
+  const shader = ['splat', 'molten', 'ink'][choice];
   const usePerfMode = choice.checkboxChecked;
 
   createWindow(shader, usePerfMode);
