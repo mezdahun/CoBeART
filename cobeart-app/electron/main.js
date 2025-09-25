@@ -122,7 +122,8 @@ function createWindow(shader, usePerfMode) {
     url = `http://127.0.0.1:${PORT}/composite/`;
   }
   win.loadURL(url);
-  win.webContents.openDevTools();
+  //Opening devtools breaks ink visualization
+  //win.webContents.openDevTools();
   win.webContents.on('did-finish-load', () => {
     win.webContents.executeJavaScript(`window.__SOCKET_PORT__=${PORT}`);
   });
