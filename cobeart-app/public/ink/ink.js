@@ -286,56 +286,92 @@ function init() {
     iMouseTarget.set(0,0,0,0);
   });
 
-  // Socket.io viewer (kept as-is)
-  const PORT = window.__SOCKET_PORT__ || 3000;
-  const socket = io(`http://127.0.0.1:${PORT}/viewer`, { transports: ['websocket'] });
-  socket.on('frame', (payload)=>{
-    if (!payload || !payload.rigidbodies) return;
-    const seen = new Set();
-    for (const rb of payload.rigidbodies) {
-      seen.add(rb.ID);
-      if (!trackedEntities[rb.ID]) {
-        let idx=-1; const used=Object.values(trackedEntities).map(e=>e.index);
-        for (let i=1;i<MAX_BODIES;i++) if(!used.includes(i)){ idx=i; break; }
-        if (idx<0) continue;
-        trackedEntities[rb.ID] = {
-          id: rb.ID, index: idx,
-          iMouse: new THREE.Vector4(0,0,0,0),
-          iMouseTarget: new THREE.Vector4(0,0,0,0),
-          lastSeen: Date.now(),
-          stationaryTimer: null, timeoutTimer: null
-        };
-      }
-      const e = trackedEntities[rb.ID];
-      e.lastSeen = Date.now();
-      if (e.timeoutTimer) clearTimeout(e.timeoutTimer);
-      const v = Math.hypot(rb.vx, rb.vy);
-      if (v < STATIONARY_VELOCITY_THRESHOLD) {
-        if (!e.stationaryTimer) {
-          e.stationaryTimer = setTimeout(()=>{
-            e.iMouseTarget.set(0,0,0,0);
-            e.stationaryTimer = null;
-          }, STATIONARY_TIMEOUT);
+  // receive messages from common bridge
+  window.addEventListener('message', (e) => {
+    const m = e.data;
+    //    printing receuived data
+    console.log('Received message:', m);
+    if (!m || m.type !== 'splat') return;
+
+    const seenIds = new Set();
+
+    seenIds.add(m.id);
+
+    if (!trackedEntities[m.id]) {
+        let newIndex = -1;
+        const usedIndices = Object.values(trackedEntities).map(e => e.index);
+        for (let i = 1; i < MAX_BODIES; i++) {
+            if (!usedIndices.includes(i)) {
+                newIndex = i;
+                break;
+            }
         }
-      } else {
-        if (e.stationaryTimer) { clearTimeout(e.stationaryTimer); e.stationaryTimer=null; }
-        const arena_x=3000, arena_y=3000;
-        const nx = (-rb.x + arena_x)/(2*arena_x);
-        const ny = (rb.y + arena_y)/(2*arena_y);
-        const pr = window.devicePixelRatio;
-        const sx = nx * window.innerWidth  * pr;
-        const sy = (1.0 - ny) * window.innerHeight * pr;
-        if (e.iMouseTarget.z===0 && e.iMouseTarget.w===0) { e.iMouse.set(sx,sy,0,0); }
-        e.iMouseTarget.set(sx,sy,sx,sy);
-      }
+
+        if (newIndex === -1) {
+            console.log("Max number of tracked bodies reached.");
+            return;
+        }
+
+        trackedEntities[m.id] = {
+            id: m.id,
+            index: newIndex,
+            iMouse: new THREE.Vector4(0, 0, 0, 0),
+            iMouseTarget: new THREE.Vector4(0, 0, 0, 0),
+            lastSeen: Date.now(),
+            stationaryTimer: null,
+            timeoutTimer: null,
+        };
     }
+
+    const entity = trackedEntities[m.id];
+    entity.lastSeen = Date.now();
+    if (entity.timeoutTimer) clearTimeout(entity.timeoutTimer);
+
+    const absVel = Math.sqrt(m.vx * m.vx + m.vy * m.vy);
+
+    if (absVel < STATIONARY_VELOCITY_THRESHOLD) {
+        if (!entity.stationaryTimer) {
+            entity.stationaryTimer = setTimeout(() => {
+                entity.iMouseTarget.set(0, 0, 0, 0);
+                entity.stationaryTimer = null;
+            }, STATIONARY_TIMEOUT);
+        }
+    } else {
+        if (entity.stationaryTimer) {
+            clearTimeout(entity.stationaryTimer);
+            entity.stationaryTimer = null;
+        }
+
+        const arena_x = 3000;
+        const arena_y = 3000;
+        const norm_x = (-m.x + arena_x) / (2 * arena_x);
+        const norm_y = (m.y + arena_y) / (2 * arena_y);
+        const pixelRatio = window.devicePixelRatio;
+        const screenX = norm_x * window.innerWidth * pixelRatio;
+        const screenY = (1.0 - norm_y) * window.innerHeight * pixelRatio;
+
+        if (entity.iMouseTarget.z === 0 && entity.iMouseTarget.w === 0) {
+            entity.iMouse.x = screenX;
+            entity.iMouse.y = screenY;
+        }
+
+        entity.iMouseTarget.x = screenX;
+        entity.iMouseTarget.y = screenY;
+        entity.iMouseTarget.z = screenX;
+        entity.iMouseTarget.w = screenY;
+    }
+
     for (const id in trackedEntities) {
-      if (!seen.has(+id)) {
-        const e = trackedEntities[id];
-        if (!e.timeoutTimer) e.timeoutTimer = setTimeout(()=> e.iMouseTarget.set(0,0,0,0), 100);
-      }
+        if (!seenIds.has(parseInt(id, 10))) {
+            const entity = trackedEntities[id];
+            if (!entity.timeoutTimer) {
+                entity.timeoutTimer = setTimeout(() => {
+                    entity.iMouseTarget.set(0, 0, 0, 0);
+                }, 100);
+            }
+        }
     }
-  });
+});
 
   window.addEventListener('resize', onResize);
   onResize(); // ensure sizes match before first frame
