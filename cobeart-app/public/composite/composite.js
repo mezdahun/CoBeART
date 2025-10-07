@@ -197,14 +197,6 @@
                 unionFront = smoothstep(edge - softness, edge + softness, d);
             }
 
-            // front ~ 0 inside (near cursor early), 1 outside; decide which layer expands
-            float moltenWeight = (dominant == 0) ? (1.0 - unionFront) : unionFront;
-
-//            vec4 fluidCol = texture2D(uFluid, uv);
-//            vec4 moltenCol = texture2D(uMolten, uv);
-//            vec3 color = mix(fluidCol.rgb, moltenCol.rgb, clamp(moltenWeight, 0.0, 1.0));
-//            float alpha = mix(fluidCol.a, moltenCol.a, clamp(moltenWeight, 0.0, 1.0));
-//            gl_FragColor = vec4(color, alpha);
             vec4 fromCol = texByIndex(uFrom, uv);
             vec4 toCol   = texByIndex(uTo,   uv);
 
@@ -330,23 +322,85 @@
 
             // Use the first body (if any) to drive the parent “cursor”
             // so molten reacts immediately; fluid receives splats for ALL bodies.
-            const first = payload.rigidbodies[0];
+            let leftHandIndex = 0
+            let rightHandIndex = 1
+            // calculate euclidian distance between left hand and right hand
+            if (payload.rigidbodies.length >= 2) {
+                const lh = payload.rigidbodies[leftHandIndex];
+                const rh = payload.rigidbodies[rightHandIndex];
+                const dx = lh.x - rh.x;
+                const dy = lh.y - rh.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
 
-            for (const rb of payload.rigidbodies) {
+                // If hands are close together, use their midpoint as cursor and always switch to fluid
+                if (dist < 200 && lh.z < 2700 && rh.z < 2700) {
+                    console.log('Clapping hands detected, using midpoint for cursor');
+                    // Initiating transition to molten
+                    if (gateDominant !== 0) {
+                        triggerTransition(0);
+                    }
 
-                // TODO: divide on which rigid body to track for the transition animation and when to trigger
-                nx = (-rb.x + arena.x) / (2 * arena.x);
-                ny = ( rb.y + arena.y) / (2 * arena.y);
-                console.log(`rb ${rb.ID} pos ${rb.x.toFixed(1)},${rb.y.toFixed(1)} => norm ${nx.toFixed(2)},${ny.toFixed(2)}`);
+                    nx = (- (lh.x + rh.x) / 2 + arena.x) / (2 * arena.x);
+                    ny = ( (lh.y + rh.y) / 2 + arena.y) / (2 * arena.y);
 
-                // For the transition animation we add seeds at the body position so that the
-                // transition keeps following the tracked object
-                if (wantSeeds) {
-                    if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
-                        if (seedGateActive) addSeed(nx, 1-ny);
-                    };
+                    if (wantSeeds) {
+                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+                            if (seedGateActive) addSeed(nx, 1-ny);
+                        };
+                    }
                 }
+
+                // if left hand above 2500 in z, switch to molten and keep cursor on left hand
+                else if (lh.z > 2700) {
+                    // Initiating transition to molten
+                    if (gateDominant !== 1) {
+                        triggerTransition(1);
+                    }
+
+                    nx = (-lh.x + arena.x) / (2 * arena.x);
+                    ny = ( lh.y + arena.y) / (2 * arena.y);
+
+                    if (wantSeeds) {
+                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+                            if (seedGateActive) addSeed(nx, 1-ny);
+                        };
+                    }
+                }
+
+                // if right hand above 2500 in z, switch to ink and keep cursor on right hand
+                else if (rh.z > 2700) {
+                    // Initiating transition to ink
+                    if (gateDominant !== 2) {
+                        triggerTransition(2);
+                    }
+
+                    nx = (-rh.x + arena.x) / (2 * arena.x);
+                    ny = ( rh.y + arena.y) / (2 * arena.y);
+
+                    if (wantSeeds) {
+                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+                            if (seedGateActive) addSeed(nx, 1-ny);
+                        };
+                    }
+                }
+
             }
+
+//            for (const rb of payload.rigidbodies) {
+//
+//                // TODO: divide on which rigid body to track for the transition animation and when to trigger
+//                nx = (-rb.x + arena.x) / (2 * arena.x);
+//                ny = ( rb.y + arena.y) / (2 * arena.y);
+//                console.log(`rb ${rb.ID} pos ${rb.x.toFixed(1)},${rb.y.toFixed(1)} => norm ${nx.toFixed(2)},${ny.toFixed(2)}`);
+//
+//                // For the transition animation we add seeds at the body position so that the
+//                // transition keeps following the tracked object
+//                if (wantSeeds) {
+//                    if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+//                        if (seedGateActive) addSeed(nx, 1-ny);
+//                    };
+//                }
+//            }
             });
         }
 
