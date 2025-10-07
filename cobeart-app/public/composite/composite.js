@@ -27,8 +27,12 @@
         precision highp float;
         varying vec2 vUv;
 
-        uniform sampler2D uFluid;
-        uniform sampler2D uMolten;
+        uniform sampler2D uFluid;  // 0
+        uniform sampler2D uMolten;  // 1
+        uniform sampler2D uInk;  // 2
+
+        uniform int uFrom;          // index: 0=Fluid, 1=Molten, 2=Ink
+        uniform int uTo;            // index: 0=Fluid, 1=Molten, 2=Ink
 
         uniform vec2  uResolution;   // pixels
         uniform float uTime;          // seconds
@@ -71,6 +75,13 @@
             float d = hash(i + vec2(1.0, 1.0));
             vec2 u = f * f * (3.0 - 2.0 * f);
             return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+        }
+
+        vec4 texByIndex(int idx, vec2 uv) {
+            if (idx == 0) return texture2D(uFluid,  uv);
+            if (idx == 1) return texture2D(uMolten, uv);
+            if (idx == 2) return texture2D(uInk,    uv);
+            return            texture2D(uInk,    uv);
         }
 
         float fbm(vec2 p){
@@ -189,11 +200,19 @@
             // front ~ 0 inside (near cursor early), 1 outside; decide which layer expands
             float moltenWeight = (dominant == 0) ? (1.0 - unionFront) : unionFront;
 
-            vec4 fluidCol = texture2D(uFluid, uv);
-            vec4 moltenCol = texture2D(uMolten, uv);
-            vec3 color = mix(fluidCol.rgb, moltenCol.rgb, clamp(moltenWeight, 0.0, 1.0));
-            float alpha = mix(fluidCol.a, moltenCol.a, clamp(moltenWeight, 0.0, 1.0));
-            gl_FragColor = vec4(color, alpha);
+//            vec4 fluidCol = texture2D(uFluid, uv);
+//            vec4 moltenCol = texture2D(uMolten, uv);
+//            vec3 color = mix(fluidCol.rgb, moltenCol.rgb, clamp(moltenWeight, 0.0, 1.0));
+//            float alpha = mix(fluidCol.a, moltenCol.a, clamp(moltenWeight, 0.0, 1.0));
+//            gl_FragColor = vec4(color, alpha);
+            vec4 fromCol = texByIndex(uFrom, uv);
+            vec4 toCol   = texByIndex(uTo,   uv);
+
+            // Inside the front we reveal "to"; outside we keep "from".
+            float w = 1.0 - unionFront;         // 0 outside, 1 inside
+            w = clamp(w, 0.0, 1.0);
+
+            gl_FragColor = mix(fromCol, toCol, w);
         }
     `;
 
@@ -206,6 +225,9 @@
         const uniforms = {
             uFluid:        { value: opts.fluidTexture || null }, // Texture for fluid layer
             uMolten:       { value: opts.moltenTexture || null }, // Texture for molten layer
+            uInk:          { value: opts.inkTexture || null },    // Texture for ink layer
+            uFrom:         { value: 0 }, // Which texture index is "from" (0=fluid,1=molten,2=ink)
+            uTo:           { value: 0 }, // Which texture index is "to"   (0=fluid,1=molten,2=ink)
             uResolution:   { value: opts.resolution || new THREE.Vector2(1920, 1080) }, // Render resolution
             uTime:         { value: 0.0 }, // Animation time in seconds
             uCursor:       { value: new THREE.Vector2(0.5, 0.5) }, // Cursor position (normalized)
@@ -255,12 +277,16 @@
         // Getting Elements
         const fluidFrame = document.getElementById('fluidFrame');
         const moltenFrame = document.getElementById('moltenFrame');
+        const inkFrame = document.getElementById('inkFrame');
 
         // Sources and textures
         let fluidCanvas = null;
         let moltenCanvas = null;
+        let inkCanvas = null;
+
         let fluidTex = null;
         let moltenTex = null;
+        let inkTex = null;
 
         // Three.js state
         let renderer, scene, camera, mesh, material;
@@ -276,6 +302,7 @@
 
         // Seed mgmt and transition parameters
         let gateDominant = 0; // matches shader logic: 0 first half, 1 second half
+        const frames = [fluidFrame, moltenFrame, inkFrame];
         let gateLastFlipTime = 0.0; // seconds
         let seedGateActive = false;
         let seedEndTime = 0.0; // absolute time when current transition seeding ends
@@ -350,6 +377,7 @@
             material = CompositeShader.createMaterial({
             fluidTexture: makeFallbackTexture(0x2244ff),
             moltenTexture: makeFallbackTexture(0xff6600),
+            inkTexture: makeFallbackTexture(0x000000),
             resolution: res
             });
 
@@ -377,7 +405,7 @@
             const w = window.innerWidth;
             const h = window.innerHeight;
             // Set both element attributes and CSS to ensure contentWindow size
-            [fluidFrame, moltenFrame].forEach(f => {
+            [fluidFrame, moltenFrame, inkFrame].forEach(f => {
             if (!f) return;
             f.width = w;
             f.height = h;
@@ -393,11 +421,19 @@
                 if (canvases && canvases.length) fluidCanvas = canvases[0];
             }
             } catch (e) {}
+
             try {
             if (!moltenCanvas && moltenFrame.contentWindow && moltenFrame.contentDocument) {
                 const canvases = moltenFrame.contentDocument.getElementsByTagName('canvas');
                 if (canvases && canvases.length) moltenCanvas = canvases[0];
             }
+            } catch (e) {}
+
+            try {
+              if (!inkCanvas && inkFrame.contentWindow && inkFrame.contentDocument) {
+                const canvases = inkFrame.contentDocument.getElementsByTagName('canvas');
+                if (canvases && canvases.length) inkCanvas = canvases[0];   // ink/index.html uses <canvas id="gl-canvas">. :contentReference[oaicite:1]{index=1}
+              }
             } catch (e) {}
 
             if (fluidCanvas && !fluidTex) {
@@ -412,31 +448,37 @@
             moltenTex.magFilter = THREE.LinearFilter;
             material.uniforms.uMolten.value = moltenTex;
             }
+            if (inkCanvas && !inkTex) {
+              inkTex = new THREE.CanvasTexture(inkCanvas);
+              inkTex.minFilter = THREE.LinearFilter;
+              inkTex.magFilter = THREE.LinearFilter;
+              material.uniforms.uInk.value = inkTex; // see shader/uniforms below
+            }
 
             attachKeysToIframe(fluidFrame);
             attachKeysToIframe(moltenFrame);
+            attachKeysToIframe(inkFrame);
         }
 
 
-        function triggerTransition(toDominant) {
+        function triggerTransition(toIndex) {
           if (!initialized) return;
-          if (toDominant === gateDominant) return;
+          if (toIndex === gateDominant) return;
 
-          // Hide current interactive overlay so the shader transition is visible
-          if (gateDominant === 1) {
-            setFrameVisibility(fluidFrame, false);
-          } else {
-            setFrameVisibility(moltenFrame, false);
-          }
+          // Hide the currently visible iframe so the shader transition is visible
+          setFrameVisibility(frames[gateDominant], false);
+//          setFrameVisibility(frames[gateDominant], true);
+//          setFrameVisibility(frames[toIndex], true);
 
-          gateDominant = toDominant;
-
-          // Tell the shader which side is dominant now and when the flip started
+          // Configure shader for a from→to transition
           const t = material.uniforms.uTime.value;
-          material.uniforms.uDominant.value = toDominant;
+          material.uniforms.uFrom.value = gateDominant; // previous
+          material.uniforms.uTo.value   = toIndex;      // target
           material.uniforms.uFlipTime.value = t;
 
-          // Run the seeded transition window
+          gateDominant = toIndex;
+
+          // Seed window + schedule end
           startTransitionSeeds(t);
           seedEndTime = t + material.uniforms.uAnimSeconds.value;
         }
@@ -444,9 +486,9 @@
         // One handler function we can attach everywhere (parent + iframes)
         function onKeyAnyDoc(event) {
           const k = event.key;
-          if (k === '0' || k === '1') {
-            event.preventDefault(); // avoid typing "0/1" into inputs inside the iframe
-            triggerTransition(parseInt(k, 10));
+          if (k === '0' || k === '1' || k === '2') {
+            event.preventDefault();
+            triggerTransition(parseInt(k, 10)); // 0=fluid, 1=molten, 2=ink
           }
         }
 
@@ -485,47 +527,16 @@
             tryBindSources();
             if (fluidTex) fluidTex.needsUpdate = true;
             if (moltenTex) moltenTex.needsUpdate = true;
+            if (inkTex)    inkTex.needsUpdate    = true;
             material.uniforms.uTime.value = t;
             material.uniforms.uCursor.value.set(cursor.x, cursor.y);
 
-            // Update gating: enable seed dropping only right after a dominant flip
-//            const cyc  = material.uniforms.uCycleSeconds.value;
-//            const auto = material.uniforms.uAutoCycle.value > 0.5;
-
-//            // Toggle dominant once per full cycle:
-//            const dom = auto
-//            ? ((Math.floor(t / Math.max(0.001, cyc)) % 2) === 0 ? 0 : 1)
-//            : material.uniforms.uDominant.value;
-//
-//            if (dom !== gateDominant) {
-//            // First we remobe the visibility of the iframe such that we can see the animation
-//            // this will remove interactive elements from view
-//            if (gateDominant === 1) {
-//                setFrameVisibility(fluidFrame, false); // Hide fluidFrame
-//            } else {
-//                setFrameVisibility(moltenFrame, false); // Hide moltenFrame
-//            }
-//
-//            gateDominant = dom;
-//            gateLastFlipTime = t;
-//
-//            // tell the shader when the flip started
-//            material.uniforms.uFlipTime.value = t;
-//
-//            // open a seeding window that matches the visual ramp
-//            startTransitionSeeds(t);
-//            seedEndTime = t + material.uniforms.uAnimSeconds.value;
-//            }
-
             if (seedGateActive && t >= seedEndTime) {
             endTransitionSeeds();
-            if (gateDominant === 1) {
-                setFrameVisibility(fluidFrame, true);  // Show fluidFrame
-                setFrameVisibility(moltenFrame, false); // Hide moltenFrame
-            } else {
-                setFrameVisibility(fluidFrame, false); // Hide fluidFrame
-                setFrameVisibility(moltenFrame, true);  // Show moltenFrame
-            }
+            frames.forEach((f, i) => setFrameVisibility(f, i === gateDominant));
+
+            material.uniforms.uFrom.value = gateDominant;
+            material.uniforms.uTo.value   = gateDominant;
             }
 
             renderer.render(scene, camera);
@@ -577,6 +588,7 @@
         // Assist binding by listening for iframe load as well
         fluidFrame.addEventListener('load', tryBindSources);
         moltenFrame.addEventListener('load', tryBindSources);
+        inkFrame.addEventListener('load', tryBindSources);
 
         // Nudge fluid to start with a few splats (same as its GUI quickstart)
         try { fluidFrame.contentWindow && fluidFrame.contentWindow.postMessage({ type: 'splat', x: 0.5, y: 0.5, id: 0, color: [1, 0.5, 0.2] }, '*'); } catch(_){}
