@@ -123,7 +123,10 @@ function createWindow(shader, usePerfMode) {
   }
   win.loadURL(url);
   //Opening devtools breaks ink visualization
-  //win.webContents.openDevTools();
+  // Only open webtools if shader is not 'ink'
+  if (shader !== 'ink') {
+    win.webContents.openDevTools();
+  };
   win.webContents.on('did-finish-load', () => {
     win.webContents.executeJavaScript(`window.__SOCKET_PORT__=${PORT}`);
   });
