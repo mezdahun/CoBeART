@@ -23,17 +23,27 @@
       border: 0;
       z-index: 0;
     }
+    #out {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    color: white;
+    background: transparent;
+    z-index: 1; /* Ensure it appears above the iframes */
+    pointer-events: none; /* Prevent interaction */
+  }
   </style>
 </head>
 
 <body>
+  <pre id="out"></pre>
   <!-- Including socket.io and three.js libraries -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <!--  Defining transitions between shaders -->
   <script src="./composite.js"></script>
   <!-- Using fluid-bridge to stream rigid bodies to fluid shader -->
-  <!-- TODO: molten shaed already includes listening for rigid bodies in molten.js, this should be cleaned up and unified.-->
   <script src="/fluid-bridge.js"></script>
 
   <!-- Loading each shader as they are defined by their own index.html -->
