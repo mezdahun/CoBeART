@@ -33,11 +33,9 @@
         uniform vec2  uResolution;   // pixels
         uniform float uTime;          // seconds
         uniform vec2  uCursor;        // [0,1] with (0,0)=bottom-left in render space
-        uniform float uAutoCycle;     // 1: internal 10s cycle, 0: use uDominant directly
         uniform int   uDominant;      // 0: fluid dominant (molten expands), 1: molten dominant (fluid expands)
         uniform float uEdgeSoftness;  // pixels
         uniform float uNoiseAmount;   // 0..1
-        uniform float uCycleSeconds;  // seconds, default 10
 
         // Cursor path seeding
         #define MAX_SEEDS 64
@@ -121,14 +119,8 @@
             vec2 cursorPx = vec2(uCursor.x * uResolution.x, uCursor.y * uResolution.y);
             vec2 fragPx   = vec2(uv.x * uResolution.x, uv.y * uResolution.y);
 
-            // Time within cycle [0,1)
-            float cycle = mod(uTime, max(0.001, uCycleSeconds)) / max(0.001, uCycleSeconds);
+            // Use the JS-controlled uniform directly; no auto-cycling.
             int dominant = uDominant;
-            if (uAutoCycle > 0.5) {
-                // Swap dominant every half cycle so it toggles every uCycleSeconds
-                float toggle = mod(floor(uTime / max(0.001, uCycleSeconds)), 2.0);
-                dominant = (toggle < 0.5) ? 0 : 1;
-            }
 
             float maxR = length(uResolution);
 
@@ -217,11 +209,9 @@
             uResolution:   { value: opts.resolution || new THREE.Vector2(1920, 1080) }, // Render resolution
             uTime:         { value: 0.0 }, // Animation time in seconds
             uCursor:       { value: new THREE.Vector2(0.5, 0.5) }, // Cursor position (normalized)
-            uAutoCycle:    { value: 1.0 }, // Enable AUTOMATIC cycling between layers
             uDominant:     { value: 0 }, // Which layer is currently dominant
             uEdgeSoftness: { value: 30.0 }, // Softness of the transition edge in pixels
             uNoiseAmount:  { value: 0.6 }, // Amount of noise in the edge
-            uCycleSeconds: { value: 12.0 }, // Duration of each transition cycle in seconds
             uSeedCount:    { value: 0 }, // Number of active seeds for transition
             uSeeds:        { value: seedArray }, // Array of seed positions and birth times
             uSeedSpeed:    { value: 0.9 }, // Speed at which seeds expand
@@ -249,13 +239,7 @@
     // Expose to global namespace
     global.CompositeShader = CompositeShader;
 
-    // MAin Logic
-//    window.addEventListener('error', function(e){
-//        const dbg = document.getElementById('debug');
-//        if (dbg) dbg.textContent = 'Error: ' + (e && e.message ? e.message : 'unknown');
-//      });
-
-    // Helper to set iframe visibility if debug and interactive elements are desired  
+    // Helper to set iframe visibility if debug and interactive elements are desired
     function setFrameVisibility(frame, visible) {
         if (visible) {
           frame.style.opacity = '1';
@@ -271,7 +255,6 @@
         // Getting Elements
         const fluidFrame = document.getElementById('fluidFrame');
         const moltenFrame = document.getElementById('moltenFrame');
-        //const debugEl = document.getElementById('debug');
 
         // Sources and textures
         let fluidCanvas = null;
@@ -352,14 +335,6 @@
         }
 
         function initThree() {
-//            if (!window.THREE) {
-//            debugEl.textContent = 'Error: THREE not loaded';
-//            return;
-//            }
-//            if (!window.CompositeShader) {
-//            debugEl.textContent = 'Error: CompositeShader not loaded';
-//            return;
-//            }
             renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -383,16 +358,10 @@
             initialized = true;
 
             window.addEventListener('resize', onResize);
-            //window.addEventListener('mousemove', onMouseMove);
             sizeIframes();
 
-            // Initialize dominant based on current time and cycle
-            const cyc = material.uniforms.uCycleSeconds.value;
-            const et = material.uniforms.uTime.value;
-            const prog = (cyc > 0.0) ? ((et % cyc) / cyc) : 0.0;
-            gateDominant = (prog < 0.5) ? 0 : 1;
-            // Initialize idle seed at current cursor (inactive)
-            //setIdleSeed(cursor.x, cursor.y);
+            // Initialize dominant shader
+            gateDominant = material.uniforms.uDominant.value;
         }
 
         function onResize() {
@@ -443,8 +412,70 @@
             moltenTex.magFilter = THREE.LinearFilter;
             material.uniforms.uMolten.value = moltenTex;
             }
-//            debugEl.textContent = `fluidCanvas:${!!fluidCanvas} moltenCanvas:${!!moltenCanvas} ` +
-//                                `fluidTex:${!!fluidTex} moltenTex:${!!moltenTex}`;
+
+            attachKeysToIframe(fluidFrame);
+            attachKeysToIframe(moltenFrame);
+        }
+
+
+        function triggerTransition(toDominant) {
+          if (!initialized) return;
+          if (toDominant === gateDominant) return;
+
+          // Hide current interactive overlay so the shader transition is visible
+          if (gateDominant === 1) {
+            setFrameVisibility(fluidFrame, false);
+          } else {
+            setFrameVisibility(moltenFrame, false);
+          }
+
+          gateDominant = toDominant;
+
+          // Tell the shader which side is dominant now and when the flip started
+          const t = material.uniforms.uTime.value;
+          material.uniforms.uDominant.value = toDominant;
+          material.uniforms.uFlipTime.value = t;
+
+          // Run the seeded transition window
+          startTransitionSeeds(t);
+          seedEndTime = t + material.uniforms.uAnimSeconds.value;
+        }
+
+        // One handler function we can attach everywhere (parent + iframes)
+        function onKeyAnyDoc(event) {
+          const k = event.key;
+          if (k === '0' || k === '1') {
+            event.preventDefault(); // avoid typing "0/1" into inputs inside the iframe
+            triggerTransition(parseInt(k, 10));
+          }
+        }
+
+        // Attach to parent window, parent document, and the WebGL canvas
+        function installParentKeyHandlers() {
+          window.addEventListener('keydown', onKeyAnyDoc, true);
+          document.addEventListener('keydown', onKeyAnyDoc, true);
+          if (renderer && renderer.domElement) {
+            renderer.domElement.setAttribute('tabindex', '0'); // ensure it can hold focus
+            renderer.domElement.addEventListener('keydown', onKeyAnyDoc, true);
+          }
+        }
+
+        // Attach to an iframe's inner window & document (same-origin)
+        function attachKeysToIframe(frame) {
+          try {
+            const cw = frame && frame.contentWindow;
+            const cd = frame && frame.contentDocument;
+            if (!cw || !cd) return;
+            if (cw.__keysAttached) return;      // avoid duplicates
+            cw.addEventListener('keydown', onKeyAnyDoc, true);
+            cd.addEventListener('keydown', onKeyAnyDoc, true);
+            cw.__keysAttached = true;
+            // Optional: also forward focus back to parent on Escape
+            cd.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.focus(); }, true);
+          } catch (e) {
+            // Cross-origin fallback: you'd need a tiny script inside the iframe that posts messages up.
+            // See note below.
+          }
         }
 
         function animate() {
@@ -458,33 +489,34 @@
             material.uniforms.uCursor.value.set(cursor.x, cursor.y);
 
             // Update gating: enable seed dropping only right after a dominant flip
-            const cyc  = material.uniforms.uCycleSeconds.value;
-            const auto = material.uniforms.uAutoCycle.value > 0.5;
+//            const cyc  = material.uniforms.uCycleSeconds.value;
+//            const auto = material.uniforms.uAutoCycle.value > 0.5;
 
-            // Toggle dominant once per full cycle:
-            const dom = auto
-            ? ((Math.floor(t / Math.max(0.001, cyc)) % 2) === 0 ? 0 : 1)
-            : material.uniforms.uDominant.value;
+//            // Toggle dominant once per full cycle:
+//            const dom = auto
+//            ? ((Math.floor(t / Math.max(0.001, cyc)) % 2) === 0 ? 0 : 1)
+//            : material.uniforms.uDominant.value;
+//
+//            if (dom !== gateDominant) {
+//            // First we remobe the visibility of the iframe such that we can see the animation
+//            // this will remove interactive elements from view
+//            if (gateDominant === 1) {
+//                setFrameVisibility(fluidFrame, false); // Hide fluidFrame
+//            } else {
+//                setFrameVisibility(moltenFrame, false); // Hide moltenFrame
+//            }
+//
+//            gateDominant = dom;
+//            gateLastFlipTime = t;
+//
+//            // tell the shader when the flip started
+//            material.uniforms.uFlipTime.value = t;
+//
+//            // open a seeding window that matches the visual ramp
+//            startTransitionSeeds(t);
+//            seedEndTime = t + material.uniforms.uAnimSeconds.value;
+//            }
 
-            if (dom !== gateDominant) {
-            // First we remobe the visibility of the iframe such that we can see the animation
-            // this will remove interactive elements from view
-            if (gateDominant === 1) {
-                setFrameVisibility(fluidFrame, false); // Hide fluidFrame
-            } else {
-                setFrameVisibility(moltenFrame, false); // Hide moltenFrame
-            }
-
-            gateDominant = dom;
-            gateLastFlipTime = t;
-
-            // tell the shader when the flip started
-            material.uniforms.uFlipTime.value = t;
-
-            // open a seeding window that matches the visual ramp
-            startTransitionSeeds(t);
-            seedEndTime = t + material.uniforms.uAnimSeconds.value;
-            }
             if (seedGateActive && t >= seedEndTime) {
             endTransitionSeeds();
             if (gateDominant === 1) {
@@ -533,18 +565,15 @@
         function startTransitionSeeds(now) {
             seedGateActive = true;
             clearSeeds();
-            // First seed at current cursor, active
-            //addSeed(cursor.x, cursor.y);
         }
 
         function endTransitionSeeds() {
             seedGateActive = false;
             clearSeeds();
-            // Leave only the idle tracker (inactive)
-            //setIdleSeed(cursor.x, cursor.y);
         }
 
         initThree();
+        installParentKeyHandlers();
         // Assist binding by listening for iframe load as well
         fluidFrame.addEventListener('load', tryBindSources);
         moltenFrame.addEventListener('load', tryBindSources);
