@@ -36,27 +36,54 @@ class AudioMetricsEmitter:
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._connected = threading.Event()
 
     # ---- Socket.IO event handlers ----
     def _setup_handlers(self) -> None:
         @_event(self._sio, "connect", namespace=self.namespace)
         def _on_connect() -> None:
-            print(f"[audio] connected to {self.namespace} at {self.socketio_url}")
+            self._connected.set()
+            print(f"[audio] connected to {self.namespace}")
 
         @_event(self._sio, "disconnect", namespace=self.namespace)
         def _on_disconnect() -> None:
+            self._connected.clear()
             print(f"[audio] disconnected from {self.namespace}")
 
+        # Don't log connect_error - too noisy during reconnection attempts
+        @_event(self._sio, "connect_error", namespace=self.namespace)
+        def _on_connect_error(data) -> None:
+            pass  # Silently ignore - reconnection will handle it
+
     # ---- Public API ----
-    def start(self) -> None:
+    def start(self, timeout: float = 5.0) -> bool:
+        """
+        Start the audio emitter.
+
+        Args:
+            timeout: Maximum seconds to wait for initial connection
+
+        Returns:
+            True if connected, False if not connected (will retry in background)
+        """
         if self._thread is not None:
-            return
+            return self._connected.is_set()
+
         self._connect()
+
+        # Wait for initial connection
+        if self._connected.wait(timeout=timeout):
+            # Connection message will be printed by _on_connect handler
+            pass
+        else:
+            print(f"[audio] waiting for connection (will retry every 5s)...")
+
         self.capturer.start_stream()
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, name="audio-metrics-emitter", daemon=True)
         self._thread.start()
-        print("[audio] emitter started")
+
+        return self._connected.is_set()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -74,24 +101,52 @@ class AudioMetricsEmitter:
     def _connect(self) -> None:
         namespaces = [self.namespace]
         try:
-            self._sio.connect(self.socketio_url, transports=["websocket"], namespaces=namespaces)
-        except Exception as exc:
-            print(f"[audio] connect failed: {exc}")
+            # wait=False: return immediately, let connection happen in background
+            self._sio.connect(
+                self.socketio_url,
+                transports=["websocket"],
+                namespaces=namespaces,
+                wait=False  # Don't wait - let it connect asynchronously
+            )
+        except Exception:
+            pass  # Silently fail - reconnection loop will retry
 
     def _loop(self) -> None:
         next_time = time.time()
+        last_status_log = time.time()
+        last_reconnect_attempt = 0
+        STATUS_LOG_INTERVAL = 30.0  # Log status every 30 seconds
+        RECONNECT_INTERVAL = 5.0  # Try to reconnect every 5 seconds if not connected
+
         while not self._stop_event.is_set():
+            # Try to reconnect if not connected and enough time has passed
+            now = time.time()
+            if not self._connected.is_set() and not self._sio.connected:
+                if now - last_reconnect_attempt >= RECONNECT_INTERVAL:
+                    self._connect()
+                    last_reconnect_attempt = now
+
             self._emit_once()
             next_time += self.emit_interval_s
             delay = max(0.0, next_time - time.time())
             if delay > 0:
                 time.sleep(delay)
 
+            # Periodic status logging
+            if now - last_status_log >= STATUS_LOG_INTERVAL:
+                status = "connected" if self._connected.is_set() else "disconnected"
+                print(f"[audio] status: {status}")
+                last_status_log = now
+
     def _emit_once(self) -> None:
+        # Only emit if connected
+        if not self._connected.is_set():
+            return
+
         data = self.capturer.read_chunk()
         if data is None or data.size == 0:
             return
-        payload = self._compute_metrics_payload()
+        payload = self._compute_metrics_payload(data)
         if payload is None:
             return
         try:
@@ -99,10 +154,7 @@ class AudioMetricsEmitter:
         except Exception as exc:
             print(f"[audio] emit failed: {exc}")
 
-    def _compute_metrics_payload(self) -> Optional[Dict[str, Any]]:
-        data = self.capturer.read_chunk()
-        if data is None or data.size == 0:
-            return None
+    def _compute_metrics_payload(self, data) -> Optional[Dict[str, Any]]:
         rms = float(self.capturer.get_rms(data))
         peak = float(self.capturer.get_peak_amplitude(data))
         zcr = float(self.capturer.get_zero_crossing_rate(data))
@@ -129,7 +181,7 @@ class AudioMetricsEmitter:
 
 def _event(sio_client: socketio.Client, name: str, namespace: str):
     def _decorator(func):
-        return sio_client.event(func, namespace=namespace)
+        return sio_client.on(name, namespace=namespace)(func)
 
     return _decorator
 

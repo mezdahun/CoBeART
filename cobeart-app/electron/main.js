@@ -27,6 +27,22 @@ function startHttpServer() {
   let lastFrame = null;
   let lastAudioData = null;
 
+  // Health check endpoint
+  appx.get('/health', (req, res) => {
+    const audioAge = lastAudioData ? Date.now() - lastAudioData.timestamp : null;
+    const frameAge = lastFrame ? Date.now() - lastFrame.timestamp : null;
+    res.json({
+      server: 'ok',
+      namespaces: {
+        ingest: io.of('/ingest').sockets.size,
+        audio: io.of('/audio').sockets.size,
+        viewer: io.of('/viewer').sockets.size
+      },
+      lastAudioAge: audioAge,
+      lastFrameAge: frameAge
+    });
+  });
+
   // STEP 1a: The '/audio' namespace - dedicated channel for audio metrics only
   const audio = io.of('/audio');
   audio.on('connection', (socket) => {
@@ -34,13 +50,29 @@ function startHttpServer() {
 
     // Audio metrics data - updates background state, doesn't drive emissions
     socket.on('audio_metrics', (audioData) => {
+      // Enhanced validation
       if (!audioData || typeof audioData !== 'object') return;
 
-      // Store latest audio data with timestamp
-      lastAudioData = {
-        ...audioData,
-        timestamp: Date.now()
-      };
+      // Validate expected fields
+      const requiredFields = ['rms', 'peak', 'zcr', 'dominant_frequency'];
+      const hasAllFields = requiredFields.every(field =>
+        typeof audioData[field] === 'number' && !isNaN(audioData[field])
+      );
+
+      if (!hasAllFields) {
+        console.warn('[electron] Invalid audio_metrics payload:', audioData);
+        return;
+      }
+
+      try {
+        // Store latest audio data with timestamp
+        lastAudioData = {
+          ...audioData,
+          timestamp: Date.now()
+        };
+      } catch (err) {
+        console.error('[electron] Error processing audio_metrics:', err);
+      }
     });
 
     socket.on('disconnect', () => {
