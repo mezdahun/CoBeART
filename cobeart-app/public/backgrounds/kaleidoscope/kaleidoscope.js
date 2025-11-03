@@ -6,6 +6,8 @@
 const MAX_BODIES = 10;
 let trackedEntities = {};
 let audioMetrics = { rms: 0, peak: 0, zcr: 0, dominant_frequency: 0 };
+let audioSpectrum = null;  // 2D array: [spectrum_history][spectrum_bins]
+let spectrumConfig = null; // Config object set once: { width, height, freq_min, freq_max }
 
 // Connect to Socket.IO for data
 window.viewerSocket = io("/viewer", { transports: ["websocket"] });
@@ -20,6 +22,17 @@ window.viewerSocket.on('frame', (payload) => {
             zcr: payload.audio.zcr || 0,
             dominant_frequency: payload.audio.dominant_frequency || 0
         };
+
+        // Extract spectrum_2d array if available
+        if (payload.audio.spectrum_2d) {
+            audioSpectrum = payload.audio.spectrum_2d;
+        }
+
+        // Store spectrum config once (static configuration)
+        if (payload.audio.spectrum_config && !spectrumConfig) {
+            spectrumConfig = payload.audio.spectrum_config;
+            console.log(`[kaleidoscope] Spectrum config: ${spectrumConfig.width}x${spectrumConfig.height} bins, ${spectrumConfig.freq_min}-${spectrumConfig.freq_max} Hz`);
+        }
     }
 
     // Update tracked entities

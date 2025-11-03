@@ -107,11 +107,23 @@ class AudioMetricsEmitter:
         peak = float(self.capturer.get_peak_amplitude(data))
         zcr = float(self.capturer.get_zero_crossing_rate(data))
         dominant = float(self.capturer.get_dominant_frequency(data))
+
+        # Compute spectrum and get 2D history buffer
+        self.capturer.get_spectrum(data, update_history=True)
+        spectrum_2d = self.capturer.get_spectrum_2d()
+
         return {
             "rms": rms,
             "peak": peak,
             "zcr": zcr,
             "dominant_frequency": dominant,
+            "spectrum_2d": spectrum_2d.tolist(),  # Convert numpy array to list for JSON
+            "spectrum_config": {
+                "width": self.capturer.spectrum_bins,
+                "height": self.capturer.spectrum_history,
+                "freq_min": self.capturer.freq_min,
+                "freq_max": self.capturer.freq_max,
+            },
         }
 
 

@@ -15,11 +15,17 @@ except Exception:
 class AudioCapturer:
     """A class to capture audio from a user-selected input device."""
 
-    def __init__(self, chunk_size=1024, sample_rate=48000):
+    def __init__(self, chunk_size=1024, sample_rate=48000, spectrum_bins=128, spectrum_history=16):
         """
         Initializes the AudioCapturer by selecting a device.
         A larger chunk_size (e.g., 1024) is better for frequency resolution of metrics.
         A smaller chunk_size (e.g., 512) is better for low-latency visualization.
+
+        Args:
+            chunk_size: Number of audio samples per chunk
+            sample_rate: Audio sample rate in Hz
+            spectrum_bins: Number of frequency bins for spectrum analysis
+            spectrum_history: Number of historical spectrum frames to keep
         """
         self.mic = select_audio_device()
         self.chunk_size = chunk_size
@@ -34,6 +40,24 @@ class AudioCapturer:
         self._ring = np.zeros(self.chunk_size, dtype=np.float32)
         self._ring_lock = threading.Lock()
         self._capture_thread = None
+
+        # Spectrum analysis configuration
+        self.spectrum_bins = spectrum_bins
+        self.spectrum_history = spectrum_history
+        self.freq_min = 20.0  # Hz
+        self.freq_max = 20000.0  # Hz
+
+        # Pre-compute Hanning window for FFT
+        self._window = np.hanning(chunk_size)
+
+        # Spectrum history buffer (ring buffer)
+        self._spectrum_buffer = np.zeros((spectrum_history, spectrum_bins), dtype=np.float32)
+        self._spectrum_index = 0
+        self._spectrum_lock = threading.Lock()
+
+        # Smoothing factor for spectrum (attack/decay)
+        self._spectrum_smoothing = 0.3
+        self._last_spectrum = np.zeros(spectrum_bins, dtype=np.float32)
 
     def start_stream(self):
         """Starts the audio recording stream."""
@@ -125,6 +149,83 @@ class AudioCapturer:
             return 0.0
         peak_index = int(np.argmax(magnitudes))
         return float(freqs[peak_index])
+
+    def get_spectrum(self, data, update_history=True):
+        """
+        Compute FFT spectrum with logarithmically-spaced frequency bins.
+
+        Args:
+            data: Audio samples (numpy array)
+            update_history: If True, adds this spectrum to history buffer
+
+        Returns:
+            numpy array of shape (spectrum_bins,) with normalized magnitudes [0.0, 1.0]
+        """
+        n = len(data)
+        if n == 0:
+            return np.zeros(self.spectrum_bins, dtype=np.float32)
+
+        # Apply window and compute FFT
+        windowed = data * self._window
+        fft_result = np.fft.rfft(windowed)
+        fft_freqs = np.fft.rfftfreq(n, 1.0 / self.sample_rate)
+        fft_magnitudes = np.abs(fft_result)
+
+        # Create logarithmically-spaced frequency bins (perceptually better)
+        # This maps low frequencies to more bins (bass) and high frequencies to fewer bins (treble)
+        log_freq_bins = np.logspace(
+            np.log10(max(self.freq_min, 1.0)),
+            np.log10(min(self.freq_max, self.sample_rate / 2)),
+            self.spectrum_bins + 1
+        )
+
+        # Map FFT bins to our custom bins
+        spectrum = np.zeros(self.spectrum_bins, dtype=np.float32)
+        for i in range(self.spectrum_bins):
+            # Find FFT bins within this frequency range
+            freq_low = log_freq_bins[i]
+            freq_high = log_freq_bins[i + 1]
+            mask = (fft_freqs >= freq_low) & (fft_freqs < freq_high)
+
+            if np.any(mask):
+                # Average magnitude in this frequency band
+                spectrum[i] = np.mean(fft_magnitudes[mask])
+
+        # Normalize using log scale for better visual range
+        # Add small epsilon to avoid log(0)
+        spectrum = np.log10(spectrum + 1e-10)
+        # Map to [0, 1] range (assuming typical audio range)
+        spectrum = np.clip((spectrum + 10.0) / 10.0, 0.0, 1.0)
+
+        # Apply temporal smoothing (attack/decay)
+        alpha = self._spectrum_smoothing
+        spectrum = alpha * spectrum + (1.0 - alpha) * self._last_spectrum
+        self._last_spectrum = spectrum.copy()
+
+        # Update history buffer
+        if update_history:
+            with self._spectrum_lock:
+                self._spectrum_buffer[self._spectrum_index] = spectrum
+                self._spectrum_index = (self._spectrum_index + 1) % self.spectrum_history
+
+        return spectrum
+
+    def get_spectrum_2d(self):
+        """
+        Get the 2D spectrum history buffer for use as a shader texture.
+
+        Returns:
+            numpy array of shape (spectrum_history, spectrum_bins) with values [0.0, 1.0]
+            Rows are ordered from oldest (index 0) to newest (index -1)
+        """
+        with self._spectrum_lock:
+            # Reorder buffer so oldest is first, newest is last
+            # This creates the correct orientation for texture sampling
+            buffer_copy = np.zeros_like(self._spectrum_buffer)
+            for i in range(self.spectrum_history):
+                src_idx = (self._spectrum_index + i) % self.spectrum_history
+                buffer_copy[i] = self._spectrum_buffer[src_idx]
+            return buffer_copy
 
 def main():
     """Main function to test audio capture and metrics."""

@@ -6,6 +6,8 @@
 const MAX_BODIES = 10;
 let trackedEntities = {};
 let audioMetrics = { rms: 0, peak: 0, zcr: 0, dominant_frequency: 0 };
+let audioSpectrum = null;  // 2D array: [spectrum_history][spectrum_bins]
+let spectrumConfig = null; // Config object set once: { width, height, freq_min, freq_max }
 
 // Connect to Socket.IO for data
 window.viewerSocket = io("/viewer", { transports: ["websocket"] });
@@ -20,6 +22,17 @@ window.viewerSocket.on('frame', (payload) => {
             zcr: payload.audio.zcr || 0,
             dominant_frequency: payload.audio.dominant_frequency || 0
         };
+
+        // Extract spectrum_2d array if available
+        if (payload.audio.spectrum_2d) {
+            audioSpectrum = payload.audio.spectrum_2d;
+        }
+
+        // Store spectrum config once (static configuration)
+        if (payload.audio.spectrum_config && !spectrumConfig) {
+            spectrumConfig = payload.audio.spectrum_config;
+            console.log(`[particle-orbits] Spectrum config: ${spectrumConfig.width}x${spectrumConfig.height} bins, ${spectrumConfig.freq_min}-${spectrumConfig.freq_max} Hz`);
+        }
     }
 
     // Update tracked entities
@@ -110,6 +123,7 @@ function init() {
             audioRMS: { value: 0 },
             audioPeak: { value: 0 },
             audioFreq: { value: 0 },
+            sound: { value: null },
             numBodies: { value: 0 },
             bodyPositions: { value: new Array(MAX_BODIES).fill(new THREE.Vector3(0, 0, 0)) }
         },
@@ -126,6 +140,7 @@ function init() {
             uniform float audioRMS;
             uniform float audioPeak;
             uniform float audioFreq;
+            uniform sampler2D sound;
             uniform int numBodies;
             uniform vec3 bodyPositions[${MAX_BODIES}];
 
@@ -160,8 +175,20 @@ function init() {
 
                 float dd = length(xy);
 
-                // Audio-reactive displacement
-                float snd = pow(audioRMS, 2.0) + audioPeak * 0.5;
+                // Audio-reactive displacement using spectrum texture
+                // Original: float snd = pow(texture2D(sound, vec2(fract(count * 0.01) * 0.125, dd * 0.1)).a, 5.0);
+                // Map each particle ring to a different frequency bin based on count
+                // Map distance to time history
+                float snd = 0.0;
+                if (textureSize(sound, 0).x > 0) {
+                    // Sample from spectrum texture: X = frequency (count-based), Y = time/distance
+                    vec2 soundCoord = vec2(fract(count * 0.01) * 0.125, dd * 0.1);
+                    float spectrumValue = texture2D(sound, soundCoord).r; // Use R channel (magnitude)
+                    snd = pow(spectrumValue, 5.0);
+                } else {
+                    // Fallback to scalar audio metrics if texture not available
+                    snd = pow(audioRMS, 2.0) + audioPeak * 0.5;
+                }
                 xy = xy + xy * snd;
 
                 // Add mouse interaction (modulated by tracked bodies)

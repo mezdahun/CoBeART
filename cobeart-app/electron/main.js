@@ -116,6 +116,10 @@ function createWindow(shader, usePerfMode) {
     if (usePerfMode) {
       url += '?performance=true';
     }
+  } else if (shader === 'kaleidoscope') {
+    url = `http://127.0.0.1:${PORT}/backgrounds/kaleidoscope/`;
+  } else if (shader === 'particle-orbits') {
+    url = `http://127.0.0.1:${PORT}/backgrounds/particle-orbits/`;
   }
   win.loadURL(url);
   win.webContents.on('did-finish-load', () => {
@@ -129,16 +133,20 @@ app.whenReady().then(() => {
 
   const choice = dialog.showMessageBoxSync({
     type: 'question',
-    buttons: ['Splat', 'Molten'],
+    buttons: ['Splat', 'Molten', 'Kaleidoscope', 'Particle Orbits'],
     defaultId: 0,
     title: 'Choose Visualization',
     message: 'Which visualization would you like to use?',
-    detail: 'Splat is a fluid simulation. Molten is an alternative.',
+    detail: 'Splat is a fluid simulation. Molten is an alternative. Kaleidoscope and Particle Orbits are shader backgrounds.',
     checkboxLabel: 'Performance Mode (Molten only)',
     checkboxChecked: false
   });
 
-  const shader = choice === 0 ? 'splat' : 'molten';
+  const shader =
+    choice === 0 ? 'splat' :
+      choice === 1 ? 'molten' :
+        choice === 2 ? 'kaleidoscope' :
+          'particle-orbits';
   const usePerfMode = choice.checkboxChecked;
 
   createWindow(shader, usePerfMode);
