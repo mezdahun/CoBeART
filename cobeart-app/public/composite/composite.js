@@ -312,6 +312,24 @@
         var nx = 0;
         var ny = 0;
 
+        // Use the first body (if any) to drive the parent “cursor”
+        // so molten reacts immediately; fluid receives splats for ALL bodies.
+        let bodyPartsIndex = {};
+        fetch('/body_map.json')
+          .then(response => response.json())
+          .then(data => {
+            if (data) {
+              bodyPartsIndex = data;
+            }
+          })
+          .catch(error => {
+            console.error('Failed to load body_map.json:', error);
+          });
+
+        // Creating two lists of length 5 for moving average of hand distances
+        var leftHandHistory = [];
+        var rightHandHistory = [];
+
         if (socket) {
             socket.on('frame', (payload) => {
             if (!payload || !payload.rigidbodies) return;
@@ -320,14 +338,10 @@
             // keep seeding while the gate is active:
             const wantSeeds = seedGateActive;
 
-            // Use the first body (if any) to drive the parent “cursor”
-            // so molten reacts immediately; fluid receives splats for ALL bodies.
-            let leftHandIndex = 0
-            let rightHandIndex = 1
             // calculate euclidian distance between left hand and right hand
             if (payload.rigidbodies.length >= 2) {
-                const lh = payload.rigidbodies[leftHandIndex];
-                const rh = payload.rigidbodies[rightHandIndex];
+                const lh = payload.rigidbodies[bodyPartsIndex['left_hand']];
+                const rh = payload.rigidbodies[bodyPartsIndex['right_hand']];
                 const dx = lh.x - rh.x;
                 const dy = lh.y - rh.y;
                 const dist = Math.sqrt(dx*dx + dy*dy);
@@ -383,6 +397,11 @@
                         };
                     }
                 }
+
+                // Adding current positions to end of history and removing oldest if length exceeds 5
+                leftHandHistory.push({x: lh.x, y: lh.y, z: lh.z});
+                rightHandHistory.push({x: rh.x, y: rh.y, z: rh.z});
+                if (leftHandHistory.length > 5) leftHandHistory.shift();
 
             }
 

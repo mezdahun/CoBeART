@@ -7,7 +7,7 @@ max_abs_coord_y = (-3000, 3000)
 max_abs_coord_z = (0, 2500)
 
 # number of maximum rigid bodies tracked
-max_num_objects = 6
+max_num_objects = 7
 
 # optitrack related settings
 client_address = '192.168.0.104'  # the address of the CoBe computer

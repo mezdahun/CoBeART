@@ -78,7 +78,7 @@ let config = {
     BLOOM: true,
     BLOOM_ITERATIONS: 8,
     BLOOM_RESOLUTION: 256,
-    BLOOM_INTENSITY: 0.2,
+    BLOOM_INTENSITY: 0.0,
     BLOOM_THRESHOLD: 1,
     BLOOM_SOFT_KNEE: 0.7,
     SUNRAYS: true,
@@ -1371,14 +1371,14 @@ function computeVelocityDissipation(zdict) {
     // TODO: modify other global variables to have IDs for multiple tracked opbjects
     const posz = zdict[1]
     // zpos between 0 and 1000
-    console.log("z coord: ", posz);
+    //console.log("z coord: ", posz);
     var z = typeof posz === 'number' ? posz : 0;
     z = Math.max(0, Math.min(z, 2000)) / 2000;
     // higher the z lower the dissipation (between 1 and 4)
     const mindiss = 1.0;
     const maxdiss = 4.0;
     const diss = maxdiss - z * (maxdiss - mindiss);
-    console.log("dissipation: ", z, diss);
+    //console.log("dissipation: ", z, diss);
     return diss;
 }
 
@@ -1410,13 +1410,13 @@ function update() {
         initFramebuffers();
     updateColors(dt);
     // Update splat radius and curl based on latest incoming velocities before applying inputs
-    if (config.DYNAMIC_CONFIG) {
-        config.SPLAT_RADIUS = computeSplatRadius(latestNormVel);
-        console.log("splat radius: ", config.SPLAT_RADIUS);
-        config.VELOCITY_DISSIPATION = computeVelocityDissipation(latestZ);
-        console.log("velocity dissipation: ", config.VELOCITY_DISSIPATION);
-        config.CURL = computeCurl(latestAngVel.vroll, latestAngVel.vpitch, latestAngVel.vyaw);
-    }
+//    if (config.DYNAMIC_CONFIG) {
+//        config.SPLAT_RADIUS = computeSplatRadius(latestNormVel);
+//        console.log("splat radius: ", config.SPLAT_RADIUS);
+//        config.VELOCITY_DISSIPATION = computeVelocityDissipation(latestZ);
+//        console.log("velocity dissipation: ", config.VELOCITY_DISSIPATION);
+//        config.CURL = computeCurl(latestAngVel.vroll, latestAngVel.vpitch, latestAngVel.vyaw);
+//    }
     applyInputs();
     if (!config.PAUSED)
         step(dt);
@@ -1677,7 +1677,9 @@ function blur(target, temp, iterations) {
 function splatPointer(pointer) {
     let dx = pointer.deltaX * config.SPLAT_FORCE;
     let dy = pointer.deltaY * config.SPLAT_FORCE;
-    splat(pointer.texcoordX, pointer.texcoordY, dx, dy, pointer.color);
+    // getting pointer.splatRadius if this exists, otherwise null
+    let splatRadius = pointer.splatRadius !== undefined ? pointer.splatRadius : null;
+    splat(pointer.texcoordX, pointer.texcoordY, dx, dy, pointer.color, splatRadius=splatRadius);
 }
 
 function multipleSplats(amount) {
@@ -1694,16 +1696,19 @@ function multipleSplats(amount) {
     }
 }
 
-function splat(x, y, dx, dy, color) {
+function splat(x, y, dx, dy, color, splatRadius=null) {
     splatProgram.bind();
     gl.uniform1i(splatProgram.uniforms.uTarget, velocity.read.attach(0));
     gl.uniform1f(splatProgram.uniforms.aspectRatio, canvas.width / canvas.height);
     gl.uniform2f(splatProgram.uniforms.point, x, y);
     gl.uniform3f(splatProgram.uniforms.color, dx, dy, 0.0);
-    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS / 100.0));
+
+    // check if splatRadius is null, then use default, otherwise use passed value
+    splatRadius = splatRadius === null ? config.SPLAT_RADIUS : splatRadius;
+
+    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(splatRadius / 100.0));
     blit(velocity.write);
     velocity.swap();
-
     gl.uniform1i(splatProgram.uniforms.uTarget, dye.read.attach(0));
     gl.uniform3f(splatProgram.uniforms.color, color.r, color.g, color.b);
     blit(dye.write);
@@ -1801,6 +1806,30 @@ window.addEventListener('keydown', e => {
     // Map rigid body IDs → pointer indices, so multiple bodies can paint at once (optional)
     const idToIndex = new Map();
 
+    // Use the first body (if any) to drive the parent “cursor”
+    // so molten reacts immediately; fluid receives splats for ALL bodies.
+    let bodyPartsIndex = {};
+    let trackedBodyParts = [];
+    fetch('/body_map.json')
+      .then(response => response.json())
+      .then(data => {
+        if (data) {
+          bodyPartsIndex = data;
+          console.log("Loaded body_map.json: ", data);
+          // defining which body parts to follow with steady splats
+          trackedBodyParts = [
+              bodyPartsIndex['right_hand'],
+              bodyPartsIndex['left_hand'],
+              bodyPartsIndex['left_foot'],
+              bodyPartsIndex['right_foot']
+              ];
+          console.log("Tracking body parts IDs: ", trackedBodyParts);
+        }
+      })
+      .catch(error => {
+        console.error('Failed to load body_map.json:', error);
+      });
+
     function ensurePointer(index) {
         while (pointers.length <= index) pointers.push(new pointerPrototype());
         return pointers[index];
@@ -1815,10 +1844,25 @@ window.addEventListener('keydown', e => {
         return ensurePointer(idToIndex.get(id));
     }
 
+    let leftFootZBefore = 0;
+    let rightFootZBefore = 0;
+    let chestFrontBefore = [];
+    let chestBackBefore = [];
+    let leftHandBefore = [];
+    let rightHandBefore = [];
+
+    // Defining an RGB color palette of yellow-orange-red-purple of 100 colors
+    let colorPalette = [];
+    for (let i = 0; i <= 99; i++) {
+        const hue = 60 - (i * 120 / 99); // From 60 (yellow) to -60 (purple)
+        const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
+        colorPalette.push(rgb);
+    }
+
     window.addEventListener('message', (e) => {
         const m = e.data;
         //    printing receuived data
-        console.log('Received message:', m);
+        //console.log('Received message:', m);
         if (!m || m.type !== 'splat') return;
 
         // Track latest angular velocities from the incoming message
@@ -1845,7 +1889,7 @@ window.addEventListener('keydown', e => {
         console.log(`Pointer position: (${posX}, ${posY})`);
 
         // Pick a pointer (by body ID if provided)
-        const pointer = pointerForId(m.id ?? null);
+        const pointer = pointerForId(m.id);
 
         // Press if not already down, mirroring the mousedown logic in the file
         if (!pointer.down) {
@@ -1857,14 +1901,107 @@ window.addEventListener('keydown', e => {
             }
         }
 
-        // Move exactly like the mousemove handler does
-        updatePointerMoveData(pointer, posX, posY);
+        // PATTERN 1: Changing splat radius with hand depth
+        // Calculating splat radius between 0.01 and 0.8 according to the height of the splat (z coord)
+        let splatRadius = null;
 
-        // Auto-release after a short silence so pointers don't stay "stuck down"
-        clearTimeout(pointer._autoUpTimer);
-        pointer._autoUpTimer = setTimeout(() => {
-            updatePointerUpData(pointer);
-        }, 60); // ms; tweak to taste for smoother/continuous drags
+        // Pattern parameters
+        const dynRadiusBelowZ = 1800; // z below which splat radius increases
+        const maxSplatRadius = 3.0; // maximum splat radius
+        const minSplatRadius = 0.1; // minimum splat radius
+
+
+        // If the tracked object is a hand we dynamically adjust splat radius
+        if (m.id === bodyPartsIndex['right_hand'] || m.id === bodyPartsIndex['left_hand']) {
+            const posZ = m.z;
+            if (typeof posZ === 'number') {
+                // below dynRadiusBelowZ z we increase splat radius according to depth
+                if (posZ < dynRadiusBelowZ) {
+                    const z = Math.max(0, Math.min(posZ, dynRadiusBelowZ)) / dynRadiusBelowZ;
+                    splatRadius = maxSplatRadius - z * (maxSplatRadius - minSplatRadius);
+                } else {
+                    splatRadius = minSplatRadius;
+                }
+            }
+        }
+
+        // PATTERN 2: Bloom kick: set bloom according to the highest foot's z coord
+        const posZ = m.z;
+        const maxBloomZ = 1500; // z at which bloom is maximum
+        const maxBloomValue = 0.15; // maximum bloom intensity
+        if ((m.id === bodyPartsIndex['right_foot'] && posZ > leftFootZBefore) ||
+            (m.id === bodyPartsIndex['left_foot'] && posZ > rightFootZBefore)
+        ) {
+            // Set bloom intensity between 0 and 3 according to foot height
+            const maxFootZ = maxBloomZ; // z at which bloom is maximum
+            const z = Math.max(0, Math.min(posZ, maxFootZ)) / maxFootZ;
+            const newBloomValue = z * maxBloomValue;
+            config.BLOOM_INTENSITY = z * maxBloomValue;
+
+            //console.log("Setting BLOOM_INTENSITY to ", config.BLOOM_INTENSITY);
+        }
+
+        //PATTERN 3: Color Speed: change color according to linear velocity of the tracked object
+        if (typeof m.normVel === 'number') {
+            const speed = m.normVel;
+            // Map speed to an index in the color palette. normVel is between 0 and 1 we need the output to be between 0 and 99
+            let colorIndex = Math.floor(Math.max(0, Math.min(speed, 1.0)) * 99);
+            console.log("Setting color index to ", colorIndex, " for speed ", speed);
+            const newColor = colorPalette[colorIndex];
+            console.log("Setting pointer color to ", newColor);
+            pointer.color = newColor;
+        }
+
+        //PATTERN 4: Density Control: change density diffusion according to hand-hand closeness
+        const minDensityDissipation = 0.01;
+        const maxDensityDissipation = 4.5;
+        if ((m.id === bodyPartsIndex['left_hand'] && rightHandBefore.length === 3) ||
+            (m.id === bodyPartsIndex['right_hand'] && leftHandBefore.length === 3)) {
+            var handLeftPos = leftHandBefore;
+            var handRightPos = rightHandBefore;
+            if (m.id === bodyPartsIndex['left_hand']) {
+                handLeftPos = [m.x, m.y, m.z];
+            } else if (m.id === bodyPartsIndex['right_hand']) {
+                handRightPos = [m.x, m.y, m.z];
+            }
+
+            // check the distance between hands
+            const distance = Math.sqrt(
+                (handLeftPos[0] - handRightPos[0]) ** 2 +
+                (handLeftPos[1] - handRightPos[1]) ** 2 +
+                (handLeftPos[2] - handRightPos[2]) ** 2
+            );
+
+
+            // Map distance to density dissipation between 0 (close) and 3.5 (far)
+            const maxDistance = 2000; // distance at which dissipation is maximum
+            const z = Math.max(0, Math.min(distance, maxDistance)) / maxDistance;
+            var newDissipation = maxDensityDissipation - z * (maxDensityDissipation - minDensityDissipation);
+            if (newDissipation < minDensityDissipation) {
+                newDissipation = 0.01;
+            }
+            config.DENSITY_DISSIPATION = newDissipation;
+            console.log("Setting DENSITY_DISSIPATION to ", config.DENSITY_DISSIPATION);
+        }
+
+        // Updating memory variables
+        leftFootZBefore = m.id === bodyPartsIndex['left_foot'] ? m.z : leftFootZBefore;
+        leftHandBefore = m.id === bodyPartsIndex['left_hand'] ? [m.x, m.y, m.z] : leftHandBefore;
+        rightHandBefore = m.id === bodyPartsIndex['right_hand'] ? [m.x, m.y, m.z] : rightHandBefore;
+        chestFrontBefore = m.id === bodyPartsIndex['chest_front'] ? [m.x, m.y, m.z] : chestFrontBefore;
+        chestBackBefore = m.id === bodyPartsIndex['chest_back'] ? [m.x, m.y, m.z] : chestBackBefore;
+        rightFootZBefore = m.id === bodyPartsIndex['right_foot'] ? m.z : rightFootZBefore;
+
+        if (trackedBodyParts.includes(m.id)) {
+            // Defining the parameters of the splat to be visualized and save it in the pointer move data
+            updatePointerMoveData(pointer, posX, posY, splatRadius=splatRadius);
+
+            // Auto-release after a short silence so pointers don't stay "stuck down"
+            clearTimeout(pointer._autoUpTimer);
+            pointer._autoUpTimer = setTimeout(() => {
+                updatePointerUpData(pointer);
+            }, 60); // ms; tweak to taste for smoother/continuous drags
+        };
     });
 })();
 
@@ -1881,7 +2018,7 @@ function updatePointerDownData(pointer, id, posX, posY) {
     pointer.color = generateColor();
 }
 
-function updatePointerMoveData(pointer, posX, posY) {
+function updatePointerMoveData(pointer, posX, posY, splatRadius=null) {
     pointer.prevTexcoordX = pointer.texcoordX;
     pointer.prevTexcoordY = pointer.texcoordY;
     pointer.texcoordX = posX / canvas.width;
@@ -1889,6 +2026,7 @@ function updatePointerMoveData(pointer, posX, posY) {
     pointer.deltaX = correctDeltaX(pointer.texcoordX - pointer.prevTexcoordX);
     pointer.deltaY = correctDeltaY(pointer.texcoordY - pointer.prevTexcoordY);
     pointer.moved = Math.abs(pointer.deltaX) > 0 || Math.abs(pointer.deltaY) > 0;
+    pointer.splatRadius = splatRadius;
 }
 
 function updatePointerUpData(pointer) {
