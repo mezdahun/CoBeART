@@ -15,7 +15,7 @@ except Exception:
 class AudioCapturer:
     """A class to capture audio from a user-selected input device."""
 
-    def __init__(self, chunk_size=1024, sample_rate=48000, spectrum_bins=128, spectrum_history=16):
+    def __init__(self, chunk_size=1024, sample_rate=48000, spectrum_bins=128, spectrum_history=16, enable_beat_detection=False, beat_debug=False):
         """
         Initializes the AudioCapturer by selecting a device.
         A larger chunk_size (e.g., 1024) is better for frequency resolution of metrics.
@@ -26,6 +26,8 @@ class AudioCapturer:
             sample_rate: Audio sample rate in Hz
             spectrum_bins: Number of frequency bins for spectrum analysis
             spectrum_history: Number of historical spectrum frames to keep
+            enable_beat_detection: Enable real-time beat detection (requires madmom)
+            beat_debug: Enable debug logging for beat detection
         """
         self.mic = select_audio_device()
         self.chunk_size = chunk_size
@@ -58,6 +60,36 @@ class AudioCapturer:
         # Smoothing factor for spectrum (attack/decay)
         self._spectrum_smoothing = 0.3
         self._last_spectrum = np.zeros(spectrum_bins, dtype=np.float32)
+
+        # Beat detection (optional)
+        self.enable_beat_detection = enable_beat_detection
+        self._beat_detector = None
+        self._last_forwarded_beat_timestamp = None  # Track last beat timestamp sent to consumers
+        self._current_tempo = None
+        self._beat_lock = threading.Lock()
+        self._beat_processing_thread = None
+
+        # Test logging for has_beat() internal state
+        self._has_beat_test_log = []  # Records (wall_time, detector_time, latest_beat_time, last_forwarded, returned_beat)
+        self._enable_has_beat_test = False
+        self._test_start_time = None
+
+        if self.enable_beat_detection:
+            try:
+                from cobeart.audiocapture.beatdetector import BeatDetector
+                print("[audio] Initializing beat detection...")
+                self._beat_detector = BeatDetector(
+                    buffer_seconds=2,
+                    capture_sample_rate=self.sample_rate,
+                    debug=beat_debug
+                )
+                if beat_debug:
+                    self._beat_detector.enable_logging()
+                    print("[audio] Beat detection debug logging enabled")
+                print("[audio] Beat detection enabled")
+            except ImportError as e:
+                print(f"[audio] Warning: Could not enable beat detection: {e}")
+                self.enable_beat_detection = False
 
     def start_stream(self):
         """Starts the audio recording stream."""
@@ -94,11 +126,43 @@ class AudioCapturer:
                                 self._ring[-n:] = block[:n]
                             else:
                                 self._ring[:] = block[-self.chunk_size:]
+
+                        # Feed to beat detector if enabled
+                        if self.enable_beat_detection and self._beat_detector is not None:
+                            self._beat_detector.add_chunk(block[:n] if n < self.chunk_size else block[-self.chunk_size:])
             except Exception:
                 pass
 
         self._capture_thread = threading.Thread(target=_capture_loop, name="audio-capture", daemon=True)
         self._capture_thread.start()
+
+        # Start beat processing thread if enabled
+        if self.enable_beat_detection and self._beat_detector is not None:
+            def _beat_processing_loop():
+                """Background thread that continuously processes beat detection."""
+                while not self._stop_event.is_set():
+                    # Check if processing is due
+                    if self._beat_detector.should_process():
+                        # Process beat detection (this takes ~169ms)
+                        beat, tempo = self._beat_detector.process()
+
+                        # Update shared state atomically
+                        # Beat timestamps are tracked in beat_history - consumers pull from there
+                        with self._beat_lock:
+                            if tempo is not None:
+                                self._current_tempo = tempo
+                    else:
+                        # Sleep briefly to avoid busy waiting
+                        time.sleep(0.01)  # 10ms check interval
+
+            self._beat_processing_thread = threading.Thread(
+                target=_beat_processing_loop,
+                name="beat-processing",
+                daemon=True
+            )
+            self._beat_processing_thread.start()
+            print("[audio] Beat processing thread started")
+
         self.is_recording = True
 
     def stop_stream(self):
@@ -111,6 +175,9 @@ class AudioCapturer:
         if self._capture_thread is not None:
             self._capture_thread.join(timeout=1.0)
             self._capture_thread = None
+        if self._beat_processing_thread is not None:
+            self._beat_processing_thread.join(timeout=1.0)
+            self._beat_processing_thread = None
         self.is_recording = False
         print("Audio stream stopped.")
 
@@ -227,12 +294,96 @@ class AudioCapturer:
                 buffer_copy[i] = self._spectrum_buffer[src_idx]
             return buffer_copy
 
+    def enable_has_beat_test(self):
+        """Enable test logging for has_beat() internal state."""
+        self._enable_has_beat_test = True
+        self._has_beat_test_log = []
+        self._test_start_time = time.time()
+
+    def save_has_beat_test(self, filepath):
+        """Save has_beat() test log to file."""
+        with open(filepath, 'w') as f:
+            f.write("# has_beat() internal state log\n")
+            f.write("# Format: wall_time(s), detector_time(s), latest_beat_time(s), last_forwarded_time(s), returned_beat(bool)\n")
+            for wall_time, detector_time, latest, last_fwd, result in self._has_beat_test_log:
+                last_fwd_str = f"{last_fwd:.6f}" if last_fwd is not None else "None"
+                f.write(f"{wall_time:.6f}, {detector_time:.6f}, {latest:.6f}, {last_fwd_str}, {result}\n")
+
+    def has_beat(self):
+        """
+        Check if a beat was detected and get current tempo.
+
+        This method is non-blocking and returns immediately. Beat processing
+        happens in a background thread.
+
+        Returns True only once per unique beat timestamp. Multiple calls
+        between beats return False.
+
+        Returns:
+            Tuple of (beat_detected, tempo_bpm)
+            - beat_detected: True only for first call after a new beat is detected
+            - tempo_bpm: Current tempo estimate (None if not yet determined)
+        """
+        if not self.enable_beat_detection or self._beat_detector is None:
+            return False, None
+
+        with self._beat_lock:
+            # Get latest beat timestamp from detector's history
+            if len(self._beat_detector._beat_history) == 0:
+                return False, self._current_tempo
+
+            latest_beat_time = self._beat_detector._beat_history[-1]
+
+            # Check if this is a new beat we haven't forwarded yet
+            is_new = self._last_forwarded_beat_timestamp is None or latest_beat_time != self._last_forwarded_beat_timestamp
+
+            # TEST LOGGING: Record internal state with dual timing
+            if self._enable_has_beat_test:
+                wall_time = time.time() - self._test_start_time
+                detector_time = time.time() - self._beat_detector._processing_start_time
+                self._has_beat_test_log.append((
+                    wall_time,
+                    detector_time,
+                    latest_beat_time,
+                    self._last_forwarded_beat_timestamp,
+                    is_new
+                ))
+
+            if is_new:
+                self._last_forwarded_beat_timestamp = latest_beat_time
+                return True, self._current_tempo
+
+            # Same beat as last time - already forwarded
+            return False, self._current_tempo
+
 def main():
     """Main function to test audio capture and metrics."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Capture and display audio metrics")
+    parser.add_argument(
+        "--enable-beat-detection",
+        action="store_true",
+        help="Enable real-time beat detection (requires madmom)"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging for beat detection"
+    )
+    args = parser.parse_args()
+
     # Use 1024 as the default for metrics to get better frequency resolution.
-    capturer = AudioCapturer(chunk_size=1024)
+    capturer = AudioCapturer(
+        chunk_size=1024,
+        enable_beat_detection=args.enable_beat_detection,
+        beat_debug=args.debug
+    )
     capturer.start_stream()
 
+    if args.enable_beat_detection:
+        print("Beat detection enabled")
+        if args.debug:
+            print("Debug logging enabled - verbose output will be shown")
     print("Reading audio metrics... Press Ctrl+C to stop.")
 
     try:
@@ -244,9 +395,25 @@ def main():
                 zcr = capturer.get_zero_crossing_rate(audio_data)
                 dom_freq = capturer.get_dominant_frequency(audio_data)
 
-                # Use carriage return to print on the same line for a cleaner output
-                print(f"RMS: {rms:.4f} | Peak: {peak:.4f} | ZCR: {zcr:.4f} | Dominant Freq: {dom_freq:.2f} Hz  ", end='\r')
-            
+                # Check for beat if enabled
+                if args.enable_beat_detection:
+                    beat, tempo_bpm = capturer.has_beat()
+                    # Commented out for debug mode - metrics output disabled
+                    # beat_indicator = "🥁 BEAT" if beat else "     "
+                    # tempo_str = f"{tempo_bpm:.1f} BPM" if tempo_bpm is not None else "--- BPM"
+                    # print(
+                    #     f"RMS: {rms:.4f} | Peak: {peak:.4f} | ZCR: {zcr:.4f} | "
+                    #     f"Freq: {dom_freq:.0f} Hz | {beat_indicator} | {tempo_str}  ",
+                    #     end='\r'
+                    # )
+                else:
+                    # Use carriage return to print on the same line for a cleaner output
+                    print(
+                        f"RMS: {rms:.4f} | Peak: {peak:.4f} | ZCR: {zcr:.4f} | "
+                        f"Dominant Freq: {dom_freq:.2f} Hz  ",
+                        end='\r'
+                    )
+
             # Sleep for a duration that is close to the chunk's duration
             # This prevents a busy-wait loop from consuming 100% CPU.
             # Chunk duration = chunk_size / sample_rate = 1024 / 48000 ~= 0.021s

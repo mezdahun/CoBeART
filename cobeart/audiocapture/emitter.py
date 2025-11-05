@@ -25,11 +25,17 @@ class AudioMetricsEmitter:
         namespace: str = "/audio",
         emit_hz: float = 30.0,
         chunk_size: int = 1024,
+        enable_beat_detection: bool = False,
+        beat_debug: bool = False,
     ) -> None:
         self.socketio_url = socketio_url or get_socketio_url()
         self.namespace = namespace
         self.emit_interval_s = 1.0 / max(emit_hz, 1.0)
-        self.capturer = AudioCapturer(chunk_size=chunk_size)
+        self.capturer = AudioCapturer(
+            chunk_size=chunk_size,
+            enable_beat_detection=enable_beat_detection,
+            beat_debug=beat_debug
+        )
 
         self._sio = socketio.Client(reconnection=True, reconnection_attempts=0)
         self._setup_handlers()
@@ -149,10 +155,22 @@ class AudioMetricsEmitter:
         payload = self._compute_metrics_payload(data)
         if payload is None:
             return
+
+        # Print metrics to terminal (carriage return for live updating)
+        beat_indicator = "🥁 BEAT" if payload['beat'] else "     "
+        tempo_str = f"{payload['tempo_bpm']:.1f} BPM" if payload['tempo_bpm'] is not None else "--- BPM"
+
+        print(
+            f"[audio] RMS: {payload['rms']:.4f} | Peak: {payload['peak']:.4f} | "
+            f"ZCR: {payload['zcr']:.4f} | Freq: {payload['dominant_frequency']:.0f} Hz | "
+            f"{beat_indicator} | {tempo_str}  ",
+            end='\r'
+        )
+
         try:
             self._sio.emit("audio_metrics", payload, namespace=self.namespace)
         except Exception as exc:
-            print(f"[audio] emit failed: {exc}")
+            print(f"\n[audio] emit failed: {exc}")  # Newline to avoid overwriting metrics
 
     def _compute_metrics_payload(self, data) -> Optional[Dict[str, Any]]:
         rms = float(self.capturer.get_rms(data))
@@ -164,7 +182,10 @@ class AudioMetricsEmitter:
         self.capturer.get_spectrum(data, update_history=True)
         spectrum_2d = self.capturer.get_spectrum_2d()
 
-        return {
+        # Check for beat detection
+        beat, tempo_bpm = self.capturer.has_beat()
+
+        payload = {
             "rms": rms,
             "peak": peak,
             "zcr": zcr,
@@ -176,7 +197,11 @@ class AudioMetricsEmitter:
                 "freq_min": self.capturer.freq_min,
                 "freq_max": self.capturer.freq_max,
             },
+            "beat": beat,
+            "tempo_bpm": tempo_bpm,
         }
+
+        return payload
 
 
 def _event(sio_client: socketio.Client, name: str, namespace: str):
@@ -187,9 +212,22 @@ def _event(sio_client: socketio.Client, name: str, namespace: str):
 
 
 def main() -> None:
-    emitter = AudioMetricsEmitter()
+    import argparse
+    parser = argparse.ArgumentParser(description="Emit audio metrics to Socket.IO server")
+    parser.add_argument(
+        "--enable-beat-detection",
+        action="store_true",
+        help="Enable real-time beat detection (requires madmom)"
+    )
+    args = parser.parse_args()
+
+    emitter = AudioMetricsEmitter(enable_beat_detection=args.enable_beat_detection)
     emitter.start()
+
+    if args.enable_beat_detection:
+        print("Beat detection enabled - audio metrics will include beat flag and tempo")
     print("Press Ctrl+C to stop audio emission…")
+
     try:
         while True:
             time.sleep(1.0)
