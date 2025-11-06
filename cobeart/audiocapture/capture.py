@@ -69,10 +69,9 @@ class AudioCapturer:
         self._beat_lock = threading.Lock()
         self._beat_processing_thread = None
 
-        # Test logging for has_beat() internal state
-        self._has_beat_test_log = []  # Records (wall_time, detector_time, latest_beat_time, last_forwarded, returned_beat)
+        # Test logging for has_beat() internal state (all timestamps absolute)
+        self._has_beat_test_log = []  # Records (wall_time, latest_beat_time, last_forwarded, returned_beat)
         self._enable_has_beat_test = False
-        self._test_start_time = None
 
         if self.enable_beat_detection:
             try:
@@ -152,8 +151,9 @@ class AudioCapturer:
                             if tempo is not None:
                                 self._current_tempo = tempo
                     else:
-                        # Sleep briefly to avoid busy waiting
-                        time.sleep(0.01)  # 10ms check interval
+                        # Calculate exact sleep time until next processing window
+                        sleep_time = max(0.001, self._beat_detector._next_process_time - time.time())
+                        time.sleep(sleep_time)
 
             self._beat_processing_thread = threading.Thread(
                 target=_beat_processing_loop,
@@ -298,16 +298,15 @@ class AudioCapturer:
         """Enable test logging for has_beat() internal state."""
         self._enable_has_beat_test = True
         self._has_beat_test_log = []
-        self._test_start_time = time.time()
 
     def save_has_beat_test(self, filepath):
         """Save has_beat() test log to file."""
         with open(filepath, 'w') as f:
             f.write("# has_beat() internal state log\n")
-            f.write("# Format: wall_time(s), detector_time(s), latest_beat_time(s), last_forwarded_time(s), returned_beat(bool)\n")
-            for wall_time, detector_time, latest, last_fwd, result in self._has_beat_test_log:
+            f.write("# Format: wall_time(absolute), latest_beat_time(absolute), last_forwarded_time(absolute), returned_beat(bool)\n")
+            for wall_time, latest, last_fwd, result in self._has_beat_test_log:
                 last_fwd_str = f"{last_fwd:.6f}" if last_fwd is not None else "None"
-                f.write(f"{wall_time:.6f}, {detector_time:.6f}, {latest:.6f}, {last_fwd_str}, {result}\n")
+                f.write(f"{wall_time:.6f}, {latest:.6f}, {last_fwd_str}, {result}\n")
 
     def has_beat(self):
         """
@@ -337,13 +336,11 @@ class AudioCapturer:
             # Check if this is a new beat we haven't forwarded yet
             is_new = self._last_forwarded_beat_timestamp is None or latest_beat_time != self._last_forwarded_beat_timestamp
 
-            # TEST LOGGING: Record internal state with dual timing
+            # TEST LOGGING: Record internal state with absolute timestamps
             if self._enable_has_beat_test:
-                wall_time = time.time() - self._test_start_time
-                detector_time = time.time() - self._beat_detector._processing_start_time
+                wall_time = time.time()  # Absolute timestamp
                 self._has_beat_test_log.append((
                     wall_time,
-                    detector_time,
                     latest_beat_time,
                     self._last_forwarded_beat_timestamp,
                     is_new
