@@ -1846,6 +1846,8 @@ window.addEventListener('keydown', e => {
 
     let leftFootZBefore = 0;
     let rightFootZBefore = 0;
+    let leftFootBefore = [];
+    let rightFootBefore = [];
     let chestFrontBefore = [];
     let chestBackBefore = [];
     let leftHandBefore = [];
@@ -1858,6 +1860,34 @@ window.addEventListener('keydown', e => {
         const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
         colorPalette.push(rgb);
     }
+
+    //PATTERN 7 params
+    let fallExplosionPalette = []; // from white to blue color
+    for (let i = 0; i <= 99; i++) {
+        const hue = 240; // blue hue
+        const saturation = i / 99; // from 0 to 1
+        const value = 3.0; // full brightness
+        const rgb = HSVtoRGB(hue / 360, saturation, value);
+        fallExplosionPalette.push(rgb);
+    }
+
+    let fallExplosionStarted = false;
+    let fallExplosionFinished = false;
+    let fallExplosionStartTime = null;
+    let fallExplosionDT = 1; // milliseconds
+    let fallExplosionSplashCoordinates = [];
+    let fallExplosionTargets = [];
+    let fallExplosionStep = 15
+    let fallExplosionColorIndex = 0;
+
+    //PATTERN 8 params
+    let jumpGhostStarted = false;
+    let jumpGhostFinished = false;
+    let jumpGhostStartTime = null;
+    let jumpGhostDT = 1; // milliseconds
+    let jumpGhostSplashCoordinates = [];
+    let jumpGhostTargets = [];
+    let jumpGhostStep = 15
 
     window.addEventListener('message', (e) => {
         const m = e.data;
@@ -2007,17 +2037,272 @@ window.addEventListener('keydown', e => {
             }
         }
 
+        //PATTERN 6: Fall Explosion: When fall is detected, we generate a series of splats with dedicated ID,
+        //such that the splash goes from one of the corners of the arena to the position of the center of mass of the body
+        const fallZThreshold = 500; // z above which a fall is detected when all hands and feet are below this z
+        if (leftFootZBefore < fallZThreshold &&
+            rightFootZBefore < fallZThreshold &&
+            leftHandBefore[2] < fallZThreshold &&
+            rightHandBefore[2] < fallZThreshold) {
+            if (!fallExplosionStarted) {
+                fallExplosionStarted = true;
+                fallExplosionFinished = false;
+                fallExplosionStartTime = Date.now();
+                fallExplosionColorIndex = 0;
+                const explosionRoots = [
+                    { x: -arena_x, y: -arena_y }, // bottom-left
+                    { x: 0,        y: -arena_y }, // bottom-center
+                    { x:  arena_x, y: -arena_y }, // bottom-right
+                    { x:  arena_x, y: 0        }, // right-center
+                    { x:  arena_x, y:  arena_y }, // top-right
+                    { x: 0,        y:  arena_y }, // top-center
+                    { x: -arena_x, y:  arena_y }, // top-left
+                    { x: -arena_x, y: 0        }, // left-center
+                ];
+
+                // Define splash coordinates based on arena scaling
+                fallExplosionSplashCoordinates = explosionRoots.map(corner => {
+                    const norm_x = (-corner.x + arena_x) / (2 * arena_x);
+                    const norm_y = ( corner.y + arena_y) / (2 * arena_y);
+                    return [
+                        norm_x * canvas.clientWidth,
+                        norm_y * canvas.clientHeight
+                    ];
+                });
+
+                // Target is the center of mass of the hands, scaled with the *same* mapping
+                const centerX = (leftHandBefore[0] + rightHandBefore[0]) / 2;
+                const centerY = (leftHandBefore[1] + rightHandBefore[1]) / 2;
+
+                const norm_centerX = (-centerX + arena_x) / (2 * arena_x);
+                const norm_centerY = ( centerY + arena_y) / (2 * arena_y);
+
+                fallExplosionTargets = [
+                    norm_centerX * canvas.clientWidth,
+                    norm_centerY * canvas.clientHeight
+                ];
+
+                console.log("Fall detected! Starting fall explosion towards ", fallExplosionTargets);
+            }
+        }
+
+        if (fallExplosionStarted && (Date.now() - fallExplosionStartTime) > fallExplosionDT) {
+            console.log("Generating fall explosion splats at coordinates: ", fallExplosionSplashCoordinates);
+
+            fallExplosionSplashCoordinates.forEach((coord, index) => {
+                const posX = scaleByPixelRatio(coord[0]);
+                const posY = scaleByPixelRatio(coord[1]);
+
+                const dx = fallExplosionTargets[0] - coord[0];
+                const dy = fallExplosionTargets[1] - coord[1];
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const normDist = Math.max(0, Math.min(dist / (2 * arena_x), 1.0));
+
+                const cornerId = 9999 + index;
+                const pointer = pointerForId(cornerId);
+
+                updatePointerDownData(pointer, -1, posX, posY);
+                pointer.color = fallExplosionPalette[fallExplosionColorIndex];
+                fallExplosionColorIndex = Math.min(fallExplosionColorIndex + 1, fallExplosionPalette.length - 1);
+                console.log("Fall corner pointer DOWN: ", pointer.color);
+                updatePointerMoveData(pointer, posX, posY);
+
+                // force the splat in case delta ends up 0
+                pointer.moved = true;
+                // map radius between 0.5 and 2 according to distance from target
+                pointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
+
+                console.log("Fall corner pointer: ", pointer);
+            });
+
+            fallExplosionStartTime = Date.now();
+
+            // move each splash by a fixed distance towards the target
+            fallExplosionSplashCoordinates = fallExplosionSplashCoordinates.map(coord => {
+                const dx = fallExplosionTargets[0] - coord[0];
+                const dy = fallExplosionTargets[1] - coord[1];
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                // already close enough, snap to target
+                if (dist <= fallExplosionStep || dist === 0) {
+                    return [fallExplosionTargets[0], fallExplosionTargets[1]];
+                }
+
+                const ux = dx / dist;
+                const uy = dy / dist;
+
+                const newX = coord[0] + ux * fallExplosionStep;
+                const newY = coord[1] + uy * fallExplosionStep;
+
+                return [newX, newY];
+            });
+
+            // stop once the first splash reached the center (all arrive almost together)
+            const distToTarget = Math.sqrt(
+                (fallExplosionSplashCoordinates[0][0] - fallExplosionTargets[0]) ** 2 +
+                (fallExplosionSplashCoordinates[0][1] - fallExplosionTargets[1]) ** 2
+            );
+            if (distToTarget <= fallExplosionStep) {
+                fallExplosionFinished = true;
+            }
+        }
+
+        // recover from fall explosion state once both hands above threshold
+        if (fallExplosionFinished &&
+            leftHandBefore[2] > fallZThreshold &&
+            rightHandBefore[2] > fallZThreshold) {
+            fallExplosionStarted = false;
+        }
+
+        // PATTERN 7: Jump Ghosts: When jump is detected we generate a ghost splash (black color) striking through
+        // the center of mass of the hands in the direction of the jump
+        const jumpZThreshold = 400; // z above which a jump is detected
+        if (leftFootZBefore > jumpZThreshold &&
+            rightFootZBefore > jumpZThreshold) {
+
+            if (!jumpGhostStarted && leftHandBefore.length === 3 && rightHandBefore.length === 3) {
+                console.log("Jump detected initiation conditions met.");
+                jumpGhostStarted = true;
+                jumpGhostFinished = false;
+                jumpGhostStartTime = Date.now();
+
+                // Center of mass of the hands (arena space)
+                const centerX = (leftHandBefore[0] + rightHandBefore[0]) / 2;
+                const centerY = (leftHandBefore[1] + rightHandBefore[1]) / 2;
+
+                // Direction of the jump from current foot position vs previous one
+                let dirX = 0;
+                let dirY = 1; // fallback
+
+                if (m.id === bodyPartsIndex['right_foot'] && rightFootBefore.length === 3) {
+                    // posX, posY are the *current* arena coords of the right foot
+                    dirX = m.x - rightFootBefore[0];
+                    dirY = m.y - rightFootBefore[1];
+                } else if (m.id === bodyPartsIndex['left_foot'] && leftFootBefore.length === 3) {
+                    // same for left foot
+                    dirX = m.x - leftFootBefore[0];
+                    dirY = m.y - leftFootBefore[1];
+                }
+
+                // Normalize
+                let len = Math.sqrt(dirX * dirX + dirY * dirY);
+                if (len < 1e-3) {
+                    // If the movement vector is tiny, keep a simple default (straight up)
+                    dirX = 0;
+                    dirY = 1;
+                    len = 1;
+                }
+                dirX /= len;
+                dirY /= len;
+
+                // Find how far we can go inside the arena square [-arena_x, arena_x] x [-arena_y, arena_y]
+                const tx = dirX !== 0 ? arena_x / Math.abs(dirX) : Infinity;
+                const ty = dirY !== 0 ? arena_y / Math.abs(dirY) : Infinity;
+                const tMax = Math.min(tx, ty);
+
+                // Farthest point "behind" the COM and the point "ahead" in jump direction
+                const startArenaX = -dirX * tMax;
+                const startArenaY = -dirY * tMax;
+                const endArenaX   =  dirX * tMax;
+                const endArenaY   =  dirY * tMax;
+
+                // Map arena → canvas coords using the same transform as everywhere else
+                const norm_startX = (-startArenaX + arena_x) / (2 * arena_x);
+                const norm_startY = ( startArenaY + arena_y) / (2 * arena_y);
+                const norm_endX   = (-endArenaX   + arena_x) / (2 * arena_x);
+                const norm_endY   = ( endArenaY   + arena_y) / (2 * arena_y);
+
+                jumpGhostSplashCoordinates = [[
+                    norm_startX * canvas.clientWidth,
+                    norm_startY * canvas.clientHeight
+                ]];
+
+                jumpGhostTargets = [
+                    norm_endX * canvas.clientWidth,
+                    norm_endY * canvas.clientHeight
+                ];
+
+                console.log("Jump detected! Starting jump ghost from ",
+                    jumpGhostSplashCoordinates[0], " to ", jumpGhostTargets);
+            }
+        }
+
+        // Move and render the jump ghost
+        if (jumpGhostStarted && !jumpGhostFinished &&
+            (Date.now() - jumpGhostStartTime) > jumpGhostDT) {
+
+            console.log("Jump ghost at: ", jumpGhostSplashCoordinates);
+
+            jumpGhostSplashCoordinates.forEach((coord, index) => {
+                const posXg = scaleByPixelRatio(coord[0]);
+                const posYg = scaleByPixelRatio(coord[1]);
+
+                const dx = jumpGhostTargets[0] - coord[0];
+                const dy = jumpGhostTargets[1] - coord[1];
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const normDist = Math.max(0, Math.min(dist / (2 * arena_x), 1.0));
+
+                const ghostId = 11000 + index; // dedicated ID for the ghost
+                const ghostPointer = pointerForId(ghostId);
+
+                updatePointerDownData(ghostPointer, -1, posXg, posYg);
+                // black "ghost" color
+                ghostPointer.color = { r: 0.1, g: 0.1, b: 0.1 };
+                updatePointerMoveData(ghostPointer, posXg, posYg);
+
+                // force the splat in case delta ends up 0
+                ghostPointer.moved = true;
+                // radius grows slightly as it approaches the center / target
+                ghostPointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
+
+                console.log("Jump ghost pointer: ", ghostPointer);
+            });
+
+            jumpGhostStartTime = Date.now();
+
+            // Move the ghost forward by a fixed distance towards the target
+            jumpGhostSplashCoordinates = jumpGhostSplashCoordinates.map(coord => {
+                const dx = jumpGhostTargets[0] - coord[0];
+                const dy = jumpGhostTargets[1] - coord[1];
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist <= jumpGhostStep || dist === 0) {
+                    jumpGhostFinished = true;
+                    return [jumpGhostTargets[0], jumpGhostTargets[1]];
+                }
+
+                const ux = dx / dist;
+                const uy = dy / dist;
+
+                const newX = coord[0] + ux * jumpGhostStep;
+                const newY = coord[1] + uy * jumpGhostStep;
+
+                return [newX, newY];
+            });
+        }
+
+        // Allow a new jump ghost once the current one is done and feet are back down
+        if (jumpGhostFinished &&
+            leftFootZBefore < jumpZThreshold &&
+            rightFootZBefore < jumpZThreshold) {
+            jumpGhostStarted = false;
+        }
+
         // Updating memory variables
         leftFootZBefore = m.id === bodyPartsIndex['left_foot'] ? m.z : leftFootZBefore;
+        rightFootZBefore = m.id === bodyPartsIndex['right_foot'] ? m.z : rightFootZBefore;
         leftHandBefore = m.id === bodyPartsIndex['left_hand'] ? [m.x, m.y, m.z] : leftHandBefore;
         rightHandBefore = m.id === bodyPartsIndex['right_hand'] ? [m.x, m.y, m.z] : rightHandBefore;
         chestFrontBefore = m.id === bodyPartsIndex['chest_front'] ? [m.x, m.y, m.z] : chestFrontBefore;
         chestBackBefore = m.id === bodyPartsIndex['chest_back'] ? [m.x, m.y, m.z] : chestBackBefore;
-        rightFootZBefore = m.id === bodyPartsIndex['right_foot'] ? m.z : rightFootZBefore;
+        leftFootBefore = m.id === bodyPartsIndex['left_foot'] ? [m.x, m.y, m.z] : leftFootBefore;
+        rightFootBefore = m.id === bodyPartsIndex['right_foot'] ? [m.x, m.y, m.z] : rightFootBefore;
+
 
         if (trackedBodyParts.includes(m.id)) {
             // Defining the parameters of the splat to be visualized and save it in the pointer move data
             updatePointerMoveData(pointer, posX, posY, splatRadius=splatRadius);
+            //console.log("Fall body part pointer: ", pointer);
 
             // Auto-release after a short silence so pointers don't stay "stuck down"
             clearTimeout(pointer._autoUpTimer);
