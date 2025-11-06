@@ -20,7 +20,7 @@ def clac_vel_from_euler_components(vx, vy):
     return np.linalg.norm([vx, vy])
 
 
-def normalize_abs_velocity(abs_vel, max_vel=20000):
+def normalize_abs_velocity(abs_vel, max_vel=13000):
     """Normalizes absolute velocity to a 0-1 range based on a maximum expected velocity"""
     return min(abs_vel / max_vel, 1.0)
 

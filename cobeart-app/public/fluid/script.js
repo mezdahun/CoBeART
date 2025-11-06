@@ -1901,14 +1901,14 @@ window.addEventListener('keydown', e => {
             }
         }
 
-        // PATTERN 1: Changing splat radius with hand depth
+        // PATTERN 1: Hand drop, Changing splat radius with hand depth
         // Calculating splat radius between 0.01 and 0.8 according to the height of the splat (z coord)
         let splatRadius = null;
 
         // Pattern parameters
         const dynRadiusBelowZ = 1800; // z below which splat radius increases
-        const maxSplatRadius = 3.0; // maximum splat radius
-        const minSplatRadius = 0.1; // minimum splat radius
+        const maxSplatRadius = 2.5; // maximum splat radius
+        const minSplatRadius = 0.08; // minimum splat radius
 
 
         // If the tracked object is a hand we dynamically adjust splat radius
@@ -1929,15 +1929,18 @@ window.addEventListener('keydown', e => {
         const posZ = m.z;
         const maxBloomZ = 1500; // z at which bloom is maximum
         const maxBloomValue = 0.15; // maximum bloom intensity
+        const lowerZThreshold = 200; // z below which no bloom is applied and from which smooth change of bloom is applied
         if ((m.id === bodyPartsIndex['right_foot'] && posZ > leftFootZBefore) ||
             (m.id === bodyPartsIndex['left_foot'] && posZ > rightFootZBefore)
         ) {
-            // Set bloom intensity between 0 and 3 according to foot height
-            const maxFootZ = maxBloomZ; // z at which bloom is maximum
-            const z = Math.max(0, Math.min(posZ, maxFootZ)) / maxFootZ;
-            const newBloomValue = z * maxBloomValue;
-            config.BLOOM_INTENSITY = z * maxBloomValue;
-
+            if (typeof posZ === 'number') {
+                if (posZ > lowerZThreshold) {
+                    const z = posZ <= lowerZThreshold ? 0 : Math.min((posZ - lowerZThreshold) / (maxBloomZ - lowerZThreshold), 1) * maxBloomValue;
+                    config.BLOOM_INTENSITY = z * maxBloomValue;
+                } else {
+                    config.BLOOM_INTENSITY = 0.0;
+                }
+            }
             //console.log("Setting BLOOM_INTENSITY to ", config.BLOOM_INTENSITY);
         }
 
@@ -1972,16 +1975,36 @@ window.addEventListener('keydown', e => {
                 (handLeftPos[2] - handRightPos[2]) ** 2
             );
 
-
-            // Map distance to density dissipation between 0 (close) and 3.5 (far)
-            const maxDistance = 2000; // distance at which dissipation is maximum
-            const z = Math.max(0, Math.min(distance, maxDistance)) / maxDistance;
-            var newDissipation = maxDensityDissipation - z * (maxDensityDissipation - minDensityDissipation);
-            if (newDissipation < minDensityDissipation) {
-                newDissipation = 0.01;
+            if (distance > 1500) {
+                // Map distance to density dissipation between 0 (close) and 3.5 (far)
+                const maxDistance = 2000; // distance at which dissipation is maximum
+                const z = Math.max(0, Math.min(distance, maxDistance)) / maxDistance;
+                var newDissipation = maxDensityDissipation - z * (maxDensityDissipation - minDensityDissipation);
+                if (newDissipation < minDensityDissipation) {
+                    newDissipation = 0.01;
+                }
+                config.DENSITY_DISSIPATION = newDissipation;
+            } else {
+                config.DENSITY_DISSIPATION = maxDensityDissipation;
             }
-            config.DENSITY_DISSIPATION = newDissipation;
             console.log("Setting DENSITY_DISSIPATION to ", config.DENSITY_DISSIPATION);
+        }
+
+        //PATTERN 5: Unique Feet: Feet are tracked with black (at 0) to gray (at 2000) splat colors according to height
+        if (m.id === bodyPartsIndex['left_foot'] || m.id === bodyPartsIndex['right_foot']) {
+            const posZ = m.z;
+            if (typeof posZ === 'number') {
+                const z = Math.max(0, Math.min(posZ, 2000)) / 8000;
+                const grayValue = z; // between 0 (black) and 1 (white)
+                //black splat means we still can swirl the already existing splats with feet but
+                // foot movement will not make new splats
+                var footColor = { r: 0, g: 0, b: 0 };
+                if (posZ > 500) {
+                    footColor = { r: grayValue, g: grayValue, b: grayValue}
+                }
+                pointer.color = footColor;
+                //console.log("Setting foot color to ", footColor, " for z ", posZ);
+            }
         }
 
         // Updating memory variables
