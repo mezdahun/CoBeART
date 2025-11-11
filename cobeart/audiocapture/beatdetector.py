@@ -572,6 +572,26 @@ class BeatDetector:
 
         return beat_detected, self._estimated_bpm
 
+    def get_prediction_state(self) -> Optional[Tuple[float, float, float]]:
+        """
+        Get state information for predictive beat generation.
+
+        Returns prediction data only when tempo is stable with sufficient beat history.
+        This enables low-latency beat prediction by extrapolating from recent beats.
+
+        Returns:
+            Tuple of (last_beat_timestamp, beat_interval, tempo_bpm) if stable with ≥4 beats,
+            None otherwise
+
+        Thread-safety note: Caller should handle locking if accessed from multiple threads.
+        """
+        # Need at least 4 beats and stable tempo for reliable predictions
+        if len(self._beat_history) >= 4 and self._tempo_state == "stable" and self._estimated_bpm is not None:
+            last_beat_timestamp = self._beat_history[-1]
+            beat_interval = 60.0 / self._estimated_bpm
+            return (last_beat_timestamp, beat_interval, self._estimated_bpm)
+        return None, None, None
+
     def reset(self) -> None:
         """Reset the beat detector state (useful for testing)."""
         with self._buffer_lock:
