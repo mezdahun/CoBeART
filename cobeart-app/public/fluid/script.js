@@ -1853,13 +1853,18 @@ window.addEventListener('keydown', e => {
     let leftHandBefore = [];
     let rightHandBefore = [];
 
-    // Defining an RGB color palette of yellow-orange-red-purple of 100 colors
+    // Defining an RGB color palette of yellow-orange-red-purple of 300 colors
     let colorPalette = [];
+    let defaultColorPalette = [];
+    let minHue = 60; // yellow
+    let maxHue = -60; // purple
     for (let i = 0; i <= 99; i++) {
-        const hue = 60 - (i * 120 / 99); // From 60 (yellow) to -60 (purple)
+        const hue = minHue - (i / 99) * (minHue - maxHue);
         const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
         colorPalette.push(rgb);
+        defaultColorPalette.push(rgb);
     }
+
 
     //PATTERN 7 params
     let fallExplosionPalette = []; // from white to blue color
@@ -1888,6 +1893,9 @@ window.addEventListener('keydown', e => {
     let jumpGhostSplashCoordinates = [];
     let jumpGhostTargets = [];
     let jumpGhostStep = 15
+
+    //PATTERN 9 params
+    let headTiltColorMode = false;
 
     window.addEventListener('message', (e) => {
         const m = e.data;
@@ -2287,6 +2295,81 @@ window.addEventListener('keydown', e => {
             rightFootZBefore < jumpZThreshold) {
             jumpGhostStarted = false;
         }
+
+        //PATTERN 8: Pause Boom, Pause diffusion: of left-right hand distance smaller than 200
+        const pauseThreshold = 200; // distance below which we pause the fluid
+        if (leftHandBefore.length === 3 && rightHandBefore.length === 3) {
+            const distance = Math.sqrt(
+                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
+                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
+                (leftHandBefore[2] - rightHandBefore[2]) ** 2
+            );
+            if (distance < pauseThreshold) {
+                config.PAUSED = true;
+                //console.log("Pausing fluid due to hands closeness: ", distance);
+            } else {
+                config.PAUSED = false;
+            }
+        }
+
+        //PATTERN 9: Head Tilt Color Palette Shift: changing the color palette slice according to the roll of the head
+        // Head tilt color mode activation by moving right hand close to head
+        const headProximityThreshold = 300; // distance below which head tilt color mode is activated
+        if (leftHandBefore.length === 3 && rightHandBefore.length === 3) {
+            const headX = m.id === bodyPartsIndex['head'] ? m.x : 0;
+            const headY = m.id === bodyPartsIndex['head'] ? m.y : 0;
+            const headZ = m.id === bodyPartsIndex['head'] ? m.z : 0;
+
+            const distanceToHeadLeft = Math.sqrt(
+                (leftHandBefore[0] - headX) ** 2 +
+                (leftHandBefore[1] - headY) ** 2 +
+                (leftHandBefore[2] - headZ) ** 2
+            );
+
+            const distanceToHeadRight = Math.sqrt(
+                (rightHandBefore[0] - headX) ** 2 +
+                (rightHandBefore[1] - headY) ** 2 +
+                (rightHandBefore[2] - headZ) ** 2
+            );
+
+            if (distanceToHeadRight < headProximityThreshold) {
+                headTiltColorMode = true;
+                config.bloom = true;
+            }
+            if (distanceToHeadLeft < headProximityThreshold) {
+                headTiltColorMode = false;
+                config.bloom = false;
+            }
+        }
+
+
+        // Change color according to head tilt if mode is activated
+        if (headTiltColorMode && m.id === bodyPartsIndex['head']) {
+            let pitch = m.roll; // in degrees, positive when leaning forward
+            let rawPitch = m.roll;
+            // Map pitch between -90 (facing up) and 60 (facing down) to palette indices between 0 and 200
+            const minPitch = -40;
+            const maxPitch = 30;
+            if (pitch < minPitch) pitch = minPitch;
+            if (pitch > maxPitch) pitch = maxPitch;
+            const pitchNorm = (pitch - minPitch) / (maxPitch - minPitch);
+            let minHue = 360 * pitchNorm; // from 0 to 360
+            let maxHue = minHue + 120; // span of 300 degrees
+            // generating palette of 100 colors between minHue and maxHue
+            colorPalette.length = 0;
+            for (let i = 0; i <= 99; i++) {
+                const hue = minHue - (i / 99) * (minHue - maxHue);
+                const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
+                colorPalette.push(rgb);
+            }
+            console.log("Head raw pitch: ", rawPitch, "clamped: ", pitch, " setting color palette hues between: ", minHue, "-", maxHue);
+        }
+
+        // set back to default palette if mode is not activated
+        if (!headTiltColorMode) {
+            colorPalette = defaultColorPalette.slice();
+        }
+
 
         // Updating memory variables
         leftFootZBefore = m.id === bodyPartsIndex['left_foot'] ? m.z : leftFootZBefore;
