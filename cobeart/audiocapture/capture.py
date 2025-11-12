@@ -15,7 +15,7 @@ except Exception:
 class AudioCapturer:
     """A class to capture audio from a user-selected input device."""
 
-    def __init__(self, chunk_size=1024, sample_rate=48000, spectrum_bins=128, spectrum_history=16, enable_beat_detection=False):
+    def __init__(self, chunk_size=1024, sample_rate=48000, spectrum_bins=128, spectrum_history=16, enable_beat_detection=False, debug=False):
         """
         Initializes the AudioCapturer by selecting a device.
         A larger chunk_size (e.g., 1024) is better for frequency resolution of metrics.
@@ -27,6 +27,7 @@ class AudioCapturer:
             spectrum_bins: Number of frequency bins for spectrum analysis
             spectrum_history: Number of historical spectrum frames to keep
             enable_beat_detection: Enable real-time beat detection (requires madmom)
+            debug: Enable debug logging in beat detection components
         """
         self.mic = select_audio_device()
         self.chunk_size = chunk_size
@@ -62,15 +63,12 @@ class AudioCapturer:
 
         # Beat detection (optional)
         self.enable_beat_detection = enable_beat_detection
+        self.debug = debug
         self._beat_detector = None
-        self._last_forwarded_beat_timestamp = None  # Track last beat timestamp sent to consumers
+        self._beat_predictor = None  # Predictive beat layer for low-latency predictions
         self._current_tempo = None
         self._beat_lock = threading.Lock()
         self._beat_processing_thread = None
-
-        # Test logging for has_beat() internal state (all timestamps absolute)
-        self._has_beat_test_log = []  # Records (wall_time, latest_beat_time, last_forwarded, returned_beat)
-        self._enable_has_beat_test = False
 
         # RMS envelope (dB-scaled with attack/decay smoothing)
         self._rms_db_envelope = 0.0
@@ -94,15 +92,26 @@ class AudioCapturer:
 
         if self.enable_beat_detection:
             try:
-                from cobeart.audiocapture.beatdetector import BeatDetector
+                from cobeart.audiocapture.beat.detector import BeatDetector
+                from cobeart.audiocapture.beat.predictor import PredictiveBeatLayer
                 print("[audio] Initializing beat detection...")
                 self._beat_detector = BeatDetector(
                     buffer_seconds=2,
                     capture_sample_rate=self.sample_rate,
-                    debug=False
+                    debug=self.debug
                 )
-                self._beat_detector.enable_logging()
-                print("[audio] Beat detection enabled")
+                
+                # Only enable logging if debug mode is active
+                if self.debug:
+                    self._beat_detector.enable_logging()
+
+                # Initialize predictive layer for low-latency beat prediction
+                self._beat_predictor = PredictiveBeatLayer(
+                    beat_detector=self._beat_detector,
+                    poll_interval=0.05,  # 50ms polling when no prediction
+                    debug=self.debug
+                )
+                print("[audio] Beat detection and prediction enabled")
             except ImportError as e:
                 print(f"[audio] Warning: Could not enable beat detection: {e}")
                 self.enable_beat_detection = False
@@ -159,7 +168,7 @@ class AudioCapturer:
                 while not self._stop_event.is_set():
                     # Check if processing is due
                     if self._beat_detector.should_process():
-                        # Process beat detection (this takes ~169ms)
+                        # Process beat detection
                         beat, tempo = self._beat_detector.process()
 
                         # Update shared state atomically
@@ -453,64 +462,27 @@ class AudioCapturer:
                 buffer_copy[i] = self._spectrum_buffer[src_idx]
             return buffer_copy
 
-    def enable_has_beat_test(self):
-        """Enable test logging for has_beat() internal state."""
-        self._enable_has_beat_test = True
-        self._has_beat_test_log = []
-
-    def save_has_beat_test(self, filepath):
-        """Save has_beat() test log to file."""
-        with open(filepath, 'w') as f:
-            f.write("# has_beat() internal state log\n")
-            f.write("# Format: wall_time(absolute), latest_beat_time(absolute), last_forwarded_time(absolute), returned_beat(bool)\n")
-            for wall_time, latest, last_fwd, result in self._has_beat_test_log:
-                last_fwd_str = f"{last_fwd:.6f}" if last_fwd is not None else "None"
-                f.write(f"{wall_time:.6f}, {latest:.6f}, {last_fwd_str}, {result}\n")
-
     def has_beat(self):
         """
-        Check if a beat was detected and get current tempo.
+        Check for predicted beat and get current tempo.
 
-        This method is non-blocking and returns immediately. Beat processing
-        happens in a background thread.
+        Uses predictive beat layer to provide low-latency beat detection by predicting
+        future beats ahead of the detector. This method should be called at high frequency
+        (e.g., every audio frame at ~50-100 Hz) in the consumer's main loop.
 
-        Returns True only once per unique beat timestamp. Multiple calls
-        between beats return False.
+        The predictor internally polls the beat detector and generates predicted beat
+        timestamps when tempo is stable. Returns True when a predicted beat should trigger.
 
         Returns:
-            Tuple of (beat_detected, tempo_bpm)
-            - beat_detected: True only for first call after a new beat is detected
+            Tuple of (beat_detected, tempo_bpm, beat_timestamp)
+            - beat_detected: True when current time has reached a predicted beat
             - tempo_bpm: Current tempo estimate (None if not yet determined)
+            - beat_timestamp: Predicted beat timestamp when beat_detected=True (None otherwise)
         """
-        if not self.enable_beat_detection or self._beat_detector is None:
-            return False, None
+        if not self.enable_beat_detection or self._beat_predictor is None:
+            return False, None, None
 
-        with self._beat_lock:
-            # Get latest beat timestamp from detector's history
-            if len(self._beat_detector._beat_history) == 0:
-                return False, self._current_tempo
-
-            latest_beat_time = self._beat_detector._beat_history[-1]
-
-            # Check if this is a new beat we haven't forwarded yet
-            is_new = self._last_forwarded_beat_timestamp is None or latest_beat_time != self._last_forwarded_beat_timestamp
-
-            # TEST LOGGING: Record internal state with absolute timestamps
-            if self._enable_has_beat_test:
-                wall_time = time.time()  # Absolute timestamp
-                self._has_beat_test_log.append((
-                    wall_time,
-                    latest_beat_time,
-                    self._last_forwarded_beat_timestamp,
-                    is_new
-                ))
-
-            if is_new:
-                self._last_forwarded_beat_timestamp = latest_beat_time
-                return True, self._current_tempo
-
-            # Same beat as last time - already forwarded
-            return False, self._current_tempo
+        return self._beat_predictor.get_next_beat()
 
 def main():
     """Main function to test audio capture and metrics."""
@@ -521,12 +493,18 @@ def main():
         action="store_true",
         help="Enable real-time beat detection (requires madmom)"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging for beat detection"
+    )
     args = parser.parse_args()
 
     # Use 1024 as the default for metrics to get better frequency resolution.
     capturer = AudioCapturer(
         chunk_size=1024,
-        enable_beat_detection=args.enable_beat_detection
+        enable_beat_detection=args.enable_beat_detection,
+        debug=args.debug
     )
     capturer.start_stream()
 
@@ -543,14 +521,15 @@ def main():
                 zcr = capturer.get_zero_crossing_rate(audio_data)
                 dom_freq = capturer.get_dominant_frequency(audio_data)
 
-                # Check for beat if enabled
+                # Check for predicted beat if enabled
                 if args.enable_beat_detection:
-                    beat, tempo_bpm = capturer.has_beat()
+                    beat, tempo_bpm, beat_timestamp = capturer.has_beat()
                     beat_indicator = "🥁 BEAT" if beat else "     "
                     tempo_str = f"{tempo_bpm:.1f} BPM" if tempo_bpm is not None else "--- BPM"
+                    timestamp_str = f"@ {beat_timestamp:.3f}s" if beat and beat_timestamp else ""
                     print(
                         f"RMS: {rms:.4f} | Peak: {peak:.4f} | ZCR: {zcr:.4f} | "
-                        f"Freq: {dom_freq:.0f} Hz | {beat_indicator} | {tempo_str}  ",
+                        f"Freq: {dom_freq:.0f} Hz | {beat_indicator} {timestamp_str} | {tempo_str}  ",
                         end='\r'
                     )
                 else:

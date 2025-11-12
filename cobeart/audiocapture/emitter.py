@@ -34,7 +34,7 @@ class AudioMetricsEmitter:
         self.capturer = AudioCapturer(
             chunk_size=chunk_size,
             enable_beat_detection=enable_beat_detection,
-            beat_debug=beat_debug
+            debug=beat_debug
         )
 
         self._sio = socketio.Client(reconnection=True, reconnection_attempts=0)
@@ -158,12 +158,14 @@ class AudioMetricsEmitter:
 
         # Print metrics to terminal (carriage return for live updating)
         beat_indicator = "🥁 BEAT" if payload['beat'] else "     "
+        peak_indicator = "📈 PEAK" if payload['is_peak'] else "      "
+        onset_indicator = "⚡ ONSET" if payload['is_onset'] else "       "
         tempo_str = f"{payload['tempo_bpm']:.1f} BPM" if payload['tempo_bpm'] is not None else "--- BPM"
 
         print(
-            f"[audio] RMS: {payload['rms']:.4f} | Peak: {payload['peak']:.4f} | "
-            f"ZCR: {payload['zcr']:.4f} | Freq: {payload['dominant_frequency']:.0f} Hz | "
-            f"{beat_indicator} | {tempo_str}  ",
+            f"[audio] RMS: {payload['rms']:.4f} | Env: {payload['rms_envelope']:.3f} | "
+            f"Peak: {payload['peak']:.4f} | Freq: {payload['dominant_frequency']:.0f} Hz | "
+            f"{beat_indicator} | {peak_indicator} | {onset_indicator} | {tempo_str}  ",
             end='\r'
         )
 
@@ -178,18 +180,32 @@ class AudioMetricsEmitter:
         zcr = float(self.capturer.get_zero_crossing_rate(data))
         dominant = float(self.capturer.get_dominant_frequency(data))
 
+        # Advanced metrics
+        rms_db = float(self.capturer.get_rms_db(data))
+        rms_envelope = float(self.capturer.get_rms_envelope(rms_db))
+        is_peak, peak_intensity = self.capturer.detect_rms_peak(rms)
+        peak_intensity = float(peak_intensity)
+        is_onset, onset_strength = self.capturer.detect_onset(data)
+        onset_strength = float(onset_strength)
+
         # Compute spectrum and get 2D history buffer
         self.capturer.get_spectrum(data, update_history=True)
         spectrum_2d = self.capturer.get_spectrum_2d()
 
         # Check for beat detection
-        beat, tempo_bpm = self.capturer.has_beat()
+        beat, tempo_bpm, beat_timestamp = self.capturer.has_beat()
 
         payload = {
             "rms": rms,
             "peak": peak,
             "zcr": zcr,
             "dominant_frequency": dominant,
+            "rms_db": rms_db,
+            "rms_envelope": rms_envelope,
+            "is_peak": is_peak,
+            "peak_intensity": peak_intensity,
+            "is_onset": is_onset,
+            "onset_strength": onset_strength,
             "spectrum_2d": spectrum_2d.tolist(),  # Convert numpy array to list for JSON
             "spectrum_config": {
                 "width": self.capturer.spectrum_bins,
@@ -199,6 +215,7 @@ class AudioMetricsEmitter:
             },
             "beat": beat,
             "tempo_bpm": tempo_bpm,
+            "beat_timestamp": beat_timestamp,
         }
 
         return payload

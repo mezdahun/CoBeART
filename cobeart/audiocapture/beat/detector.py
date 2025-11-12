@@ -1,3 +1,36 @@
+"""
+Real-time beat detection engine using madmom library.
+
+Core component of CoBeART's audio processing pipeline. Processes live audio
+streams to detect beats with tempo tracking and multi-stage filtering to
+reduce false positives.
+
+Key features:
+- Online processing: Uses 2-second rolling buffer, suitable for real-time audio
+- Tempo-aware: Tracks beat intervals and tempo stability (CV-based state machine)
+- Filtered output: Spatial, duplicate, tempo-grid, and lockup prevention filters
+- Thread-safe: Rolling buffer protected by lock for concurrent audio chunk addition
+- Integration: Supports BeatLogger for offline analysis, PredictiveBeatLayer for latency reduction
+
+Processing model:
+- Call add_chunk() from audio thread to feed samples (non-blocking)
+- Call should_process() to check if processing is due (tempo-driven intervals)
+- Call process() to run detection (returns beat_detected flag and current tempo)
+- Detector self-schedules next processing time based on tempo state
+
+Performance characteristics:
+- Buffer conversion: O(n) where n=buffer_samples (deque→array copy)
+- Resampling: O(n*log(n)) FFT-based when sample rates differ, O(1) when same
+- madmom RNN: O(n) neural network inference (dominant cost, ~50-100ms typical)
+- madmom DBN: O(n) dynamic programming for beat tracking (~20-50ms typical)
+- Filtering: O(k) where k=candidate_beats (typically 1-5, vectorized NumPy ops)
+- Total latency: Primarily determined by buffer size (2s) + madmom processing time
+
+Dependencies:
+- madmom: Neural beat tracking (optional, lazy import)
+- scipy: Resampling (always required)
+- numpy: Array operations (always required)
+"""
 import time
 import numpy as np
 import threading
@@ -6,14 +39,34 @@ from typing import Tuple, Optional
 from scipy.signal import resample
 
 
+# Sentinel value indicating no beat has been detected yet
+# Uses numeric constant instead of None for performance: numeric comparison (>) is faster
+# than identity check (is None) in hot paths like duplicate filtering
+_NO_BEAT_SENTINEL = -999.0
+
+
 class BeatDetector:
     """
-    Real-time beat detection using madmom library.
+    Real-time beat detection using madmom library with sophisticated filtering pipeline.
 
-    Uses a count-based beat history (8 beats) with dynamic tempo-driven processing
-    intervals and refractory period optimization for efficient CPU usage.
+    Architecture:
+    - Rolling 2-second audio buffer with resampling (48kHz → 44.1kHz)
+    - madmom RNNBeatProcessor + DBNBeatTrackingProcessor (online mode)
+    - Multi-stage filtering: spatial, duplicate, tempo-grid, lockup prevention
+    - Count-based beat history (last 8 beats) for tempo estimation
+    - Dynamic processing intervals: tempo-driven when stable, frequent polling when unstable
+    - Tempo stability detection: tracks variance in recent beat intervals
 
-    See BEAT_DETECTION.md for architectural details and rationale.
+    The detector returns beat timestamps as absolute Unix epoch times and maintains
+    internal state for tempo tracking. Uses sentinel value (-999.0) instead of None
+    for uninitialized state to avoid type checking overhead in hot paths.
+
+    Filtering Pipeline:
+    1. Spatial filtering: Only process beats in "new region" (prevents re-detection)
+    2. Duplicate filtering: Enforce minimum beat separation (default 200ms)
+    3. Tempo state update: Analyze last 3 intervals for stability (CV < 10%)
+    4. Grid filtering: When stable, enforce alignment with predicted tempo grid
+    5. Lockup prevention: Force recovery after 10 consecutive rejections
     """
 
     def __init__(
@@ -33,8 +86,9 @@ class BeatDetector:
             buffer_seconds: Size of rolling buffer (default 2.0s)
             capture_sample_rate: Sample rate of captured audio (default 48kHz)
             madmom_sample_rate: Sample rate expected by madmom (default 44.1kHz)
-            min_interval_seconds: Minimum time between processing calls (default 170ms)
-            min_beat_interval: Minimum time between beats to prevent duplicates (default 200ms)
+            min_interval_seconds: Minimum time between processing calls in seconds (default 0,
+                which gets replaced by tempo-driven intervals when stable, or frequent polling when unstable)
+            min_beat_interval: Minimum time between beats to prevent duplicates (default 0.2s = 200ms)
             activation_threshold: Minimum activation level to consider beat section (default 0.3)
             debug: Enable debug logging (default False)
         """
@@ -70,8 +124,9 @@ class BeatDetector:
         print("[beat] Processors initialized")
 
         # State tracking (all timestamps are absolute Unix epoch time)
-        self._last_reported_beat = -999.0  # Time of last reported beat
+        self._last_reported_beat = _NO_BEAT_SENTINEL  # Time of last reported beat
         self._estimated_bpm = None  # Current tempo estimate
+        self._beat_interval = None  # Cached beat interval (60.0 / BPM) for efficiency
         self._next_process_time = time.time()  # When to next process buffer (absolute)
 
         # Beat history for BPM calculation (count-based expiry: last 8 beats)
@@ -105,7 +160,7 @@ class BeatDetector:
         Args:
             log_dir: Directory to write log file (default: current directory)
         """
-        from cobeart.audiocapture.beat_logger import BeatLogger
+        from cobeart.audiocapture.beat.logger import BeatLogger
         self._beat_logger = BeatLogger(enabled=True, log_dir=log_dir)
 
     def should_process(self) -> bool:
@@ -121,24 +176,33 @@ class BeatDetector:
         """
         Get thread-safe snapshot of audio buffer.
 
+        Uses lock to prevent race conditions with add_chunk() calls from audio thread.
+
         Returns:
-            Buffer array, or None if buffer not yet full
+            Buffer array as numpy array, or None if buffer not yet full
+
+        Performance: O(n) where n is buffer size due to deque→array conversion
         """
         with self._buffer_lock:
             if len(self._buffer) < self.buffer_samples_capture:
                 return None
-            return np.array(self._buffer, dtype=np.float32)
+            return np.array(self._buffer)
 
     def _resample_buffer(self, buffer_array: np.ndarray, timings: dict) -> np.ndarray:
         """
         Resample buffer to madmom sample rate if needed.
 
+        Uses scipy.signal.resample for high-quality resampling. If sample rates match,
+        returns original buffer without copying.
+
         Args:
             buffer_array: Audio buffer at capture sample rate
-            timings: Dictionary to record timing metrics
+            timings: Dictionary to record timing metrics (adds 'resample' key)
 
         Returns:
-            Resampled buffer at madmom sample rate
+            Resampled buffer at madmom sample rate (always float32)
+
+        Performance: O(n*log(n)) for FFT-based resampling when rates differ, O(1) when same
         """
         t_before_resample = time.time()
         if self.capture_sample_rate != self.madmom_sample_rate:
@@ -189,20 +253,25 @@ class BeatDetector:
         """
         Check if audio has meaningful beat activity above threshold.
 
+        Prevents processing silent or low-energy audio sections. When activation is too low,
+        schedules next processing based on current tempo state (beat_interval if stable,
+        min_interval if unstable). Beat history auto-expires via maxlen, so no manual clearing.
+
         Args:
-            activations: Beat activation function from madmom
+            activations: Beat activation function from madmom (1D array)
             current_time: Current absolute timestamp
 
         Returns:
-            True to continue processing, False to skip (schedules next processing)
+            True to continue processing, False to skip (next processing already scheduled)
+
+        Performance: O(n) for np.max() scan over activation array
         """
         max_activation = np.max(activations) if len(activations) > 0 else 0.0
         if max_activation < self.activation_threshold:
             # No meaningful beat activity detected
             # Schedule next processing and return False (history will auto-expire over time)
-            if self._estimated_bpm is not None:
-                beat_interval = 60.0 / self._estimated_bpm
-                next_interval = max(beat_interval, self.min_interval_seconds)
+            if self._beat_interval is not None:
+                next_interval = max(self._beat_interval, self.min_interval_seconds)
             else:
                 next_interval = self.min_interval_seconds
             self._next_process_time = current_time + next_interval
@@ -242,22 +311,23 @@ class BeatDetector:
         """
         Filter beats to only those in "new region" based on tempo state.
 
+        Prevents re-detecting beats from previous processing cycles by only considering
+        beats within a time window before current_time:
         - Stable tempo: Window = beat_interval (matches processing interval)
-        - Unstable tempo: Window = 1.0s (accommodates ≥60 BPM)
-
-        This prevents re-detecting beats from previous cycles.
+        - Unstable tempo: Window = 1.0s (accommodates slow tempos ≥60 BPM)
 
         Args:
             beats_abs: Beat timestamps in absolute time
             current_time: Current absolute timestamp
 
         Returns:
-            Filtered beats in new region
+            Filtered beats in new region (beats with timestamp > new_region_start)
+
+        Performance: O(n) for numpy boolean indexing operation
         """
         # Calculate new region duration based on tempo state
-        if self._tempo_state == "stable" and self._estimated_bpm is not None:
-            beat_interval = 60.0 / self._estimated_bpm
-            new_region_duration = beat_interval
+        if self._tempo_state == "stable" and self._beat_interval is not None:
+            new_region_duration = self._beat_interval
         else:
             new_region_duration = 1.0  # Accommodate slow tempos ≥60 BPM
 
@@ -281,11 +351,17 @@ class BeatDetector:
         """
         Filter out beats too close to last reported beat.
 
+        Prevents multiple detections of the same physical beat by enforcing minimum
+        time separation (min_beat_interval, default 200ms). Only keeps beats occurring
+        after last_reported_beat + min_beat_interval.
+
         Args:
             beats_in_new_region: Beats in new region
 
         Returns:
-            Beats with duplicates removed
+            Beats with duplicates removed (timestamp > threshold)
+
+        Performance: O(n) for numpy boolean indexing operation
         """
         filter_threshold = self._last_reported_beat + self.min_beat_interval
         new_beats = beats_in_new_region[beats_in_new_region > filter_threshold]
@@ -307,24 +383,35 @@ class BeatDetector:
         """
         Update tempo stability state based on beat history variance.
 
+        Analyzes last 3 intervals (from last 4 beats) to determine tempo stability.
+        Transitions between "stable" and "unstable" states based on variance ratio.
+        When stable, returns tempo grid parameters for filtering.
+
         Args:
-            new_beats: New beats to consider
+            new_beats: New beats to consider (must have length > 0 to trigger analysis)
 
         Returns:
             Tuple of (mean_interval, predicted_beat_time, tolerance_window) if stable with ≥4 beats,
-            None otherwise
-        """
+            None otherwise (including when unstable or insufficient beat history)
 
-        # Idea to implement IQR outlier filtering, but with only 3 intervals to verify, it doesn't do much.
+        Performance: O(1) for fixed-size history slice (last 4 beats)
+
+        Note: IQR outlier filtering was considered but provides minimal benefit with only 3 intervals.
+        """
         if len(new_beats) > 0 and len(self._beat_history) >= 4:
             # Check tempo stability: last 3 intervals should have low variance.
-            # Tried: the full beat_history, and it was less accurate.
+            # NOTE: Using only last 4 beats (3 intervals) was empirically more accurate
+            # than using full beat_history. Captures recent tempo changes while avoiding
+            # over-smoothing from older beats at different tempos.
             recent_intervals = np.diff(list(self._beat_history)[-4:])
             mean_interval = np.mean(recent_intervals)
             std_interval = np.std(recent_intervals)
+            # variance_ratio = coefficient of variation (CV): normalized measure of interval consistency
+            # NOT a BPM calculation - this is tempo stability metric used for state transitions
+            # CV < 10% indicates stable tempo, CV >= 10% indicates unstable/changing tempo
             variance_ratio = std_interval / mean_interval if mean_interval > 0 else 1.0
 
-            # Update tempo state
+            # Update tempo state based on variance ratio
             old_state = self._tempo_state
             if variance_ratio < self._tempo_variance_threshold:
                 self._tempo_state = "stable"
@@ -356,38 +443,48 @@ class BeatDetector:
         """
         Apply tempo-based grid filtering when tempo is stable.
 
-        Only accepts beats that align with predicted tempo grid.
+        Only accepts beats that align with predicted tempo grid. Uses vectorized checks:
+        1. Beat must be within tolerance_window of predicted_beat_time
+        2. Beat's interval from last beat must maintain tempo (within variance threshold)
+
+        Beats must satisfy BOTH conditions (bitwise & on boolean masks). If no beats pass,
+        clears history and accepts first beat to restart tempo tracking.
 
         Args:
-            new_beats: Candidate beats
+            new_beats: Candidate beats (may be empty)
             mean_interval: Mean interval from beat history
-            predicted_beat_time: Predicted time of next beat
-            tolerance_window: Tolerance window for prediction (±30%)
+            predicted_beat_time: Predicted time of next beat (last_beat + mean_interval)
+            tolerance_window: Tolerance window for prediction (mean_interval * variance_threshold)
 
         Returns:
-            Filtered beats (single beat closest to prediction, or first beat if all off-grid)
+            Single-element array with beat closest to prediction, or first beat if all off-grid,
+            or empty array if no beats provided
+
+        Performance: O(n) for vectorized operations on all candidate beats
         """
-        # Filter beats: only accept those within tolerance of prediction AND maintaining tempo
-        on_grid_beats = []
-        for beat in new_beats:
-            # Check 1: Does beat align with predicted time?
-            deviation_from_prediction = abs(beat - predicted_beat_time)
-            within_prediction_tolerance = deviation_from_prediction <= tolerance_window
+        if len(new_beats) == 0:
+            return new_beats
 
-            # Check 2: Does interval from last beat maintain tempo?
-            interval_from_last = beat - self._beat_history[-1]
-            interval_deviation_ratio = abs(interval_from_last - mean_interval) / mean_interval
-            maintains_tempo = interval_deviation_ratio < self._tempo_variance_threshold
+        # Vectorized check 1: alignment with predicted time
+        deviations = np.abs(new_beats - predicted_beat_time)
+        within_tolerance = deviations <= tolerance_window
 
-            # Beat must pass BOTH checks
-            if within_prediction_tolerance and maintains_tempo:
-                on_grid_beats.append((beat, deviation_from_prediction))
+        # Vectorized check 2: interval from last beat maintains tempo
+        intervals = new_beats - self._beat_history[-1]
+        interval_deviations = np.abs(intervals - mean_interval) / mean_interval
+        maintains_tempo = interval_deviations < self._tempo_variance_threshold
 
-        if len(on_grid_beats) > 0:
-            # Pick beat closest to prediction
-            on_grid_beats.sort(key=lambda x: x[1])  # Sort by deviation
-            selected_beat = on_grid_beats[0][0]
-            return np.array([selected_beat])
+        # Combine checks: beat must pass BOTH conditions
+        # Uses bitwise & for element-wise AND on numpy boolean arrays
+        # (logical 'and' operator would fail on arrays - only works for scalars)
+        valid_mask = within_tolerance & maintains_tempo
+        valid_beats = new_beats[valid_mask]
+        valid_deviations = deviations[valid_mask]
+
+        if len(valid_beats) > 0:
+            # Pick beat with minimum deviation from prediction
+            min_idx = np.argmin(valid_deviations)
+            return np.array([valid_beats[min_idx]])
         else:
             # All beats are off-grid - tempo likely changed or grid corrupted
             # Reset to unstable state by clearing history
@@ -408,13 +505,20 @@ class BeatDetector:
         """
         Force-accept beat if stuck rejecting for too long.
 
+        Tracks consecutive rejections and forces recovery after max threshold
+        (default 10 rejections ≈ 2-4 seconds). Takes most recent beat from madmom's
+        raw output and clears history to rebuild tempo from scratch. Resets rejection
+        counter on any accepted beat.
+
         Args:
-            beat_detected: Whether a beat was detected
-            beats_abs: All beats from madmom (before filtering)
+            beat_detected: Whether a beat was detected in filtering pipeline
+            beats_abs: All beats from madmom before filtering (for forced recovery)
             new_beats: Beats after filtering
 
         Returns:
-            Tuple of (beat_detected, new_beats) with forced recovery applied if needed
+            Tuple of (beat_detected, new_beats) with forced recovery applied if triggered
+
+        Performance: O(1) counter tracking
         """
         if not beat_detected:
             self._consecutive_rejections += 1
@@ -442,29 +546,38 @@ class BeatDetector:
         timings: dict
     ) -> None:
         """
-        Handle detected beat: add to history, log, calculate BPM.
+        Handle detected beat: add to history, log, calculate BPM, update state.
+
+        Adds beat to history (auto-expires oldest via maxlen=8), logs to file if enabled,
+        calculates BPM from average of all intervals in history, caches beat_interval
+        for performance, and updates last_reported_beat.
 
         Args:
-            new_beat_time: Timestamp of detected beat
+            new_beat_time: Timestamp of detected beat (absolute Unix time)
             process_start_time: When processing started (for latency calculation)
-            timings: Processing timing metrics
+            timings: Processing timing metrics (dict with 'resample', 'beat_proc', 'track_proc' keys)
+
+        Performance: O(n) where n is history size (max 8) for BPM calculation
         """
         # Add to beat history
         self._beat_history.append(new_beat_time)
 
         # Log beat timestamp if logging is enabled
         if self._beat_logger:
-            log_time = time.time()  # Absolute timestamp
             processing_latency = time.time() - process_start_time
-            interval = new_beat_time - self._last_reported_beat if self._last_reported_beat > -999.0 else None
+            log_time = process_start_time + processing_latency  # Same value, no extra syscall
+            interval = new_beat_time - self._last_reported_beat if self._last_reported_beat > _NO_BEAT_SENTINEL else None
             self._beat_logger.log_beat(new_beat_time, log_time, interval, self._estimated_bpm, len(self._beat_history), processing_latency, timings)
 
         # Calculate BPM from beat history (average intervals)
         if len(self._beat_history) >= 2:
             # Calculate intervals between consecutive beats in history
-            intervals = np.diff(list(self._beat_history))
+            intervals = np.diff(np.array(self._beat_history))
             avg_interval = np.mean(intervals)
             self._estimated_bpm = 60.0 / avg_interval
+            # Cache the interval for performance: avoids repeated division in hot paths
+            # (processing interval scheduling, grid filtering, spatial filtering)
+            self._beat_interval = avg_interval
 
         # Debug logging: beat selection and timing
         if self.debug:
@@ -472,10 +585,9 @@ class BeatDetector:
             print(f"[beat] ✓ BEAT DETECTED:")
             print(f"[beat]   Selected: {new_beat_time:.3f}s")
             print(f"[beat]   Time since last: {time_since_last:.3f}s ({time_since_last*1000:.0f}ms)")
-            if self._estimated_bpm is not None:
-                expected_interval = 60.0 / self._estimated_bpm
-                deviation = (time_since_last - expected_interval) * 1000  # ms
-                print(f"[beat]   Expected interval: {expected_interval:.3f}s (@ {self._estimated_bpm:.1f} BPM)")
+            if self._beat_interval is not None:
+                deviation = (time_since_last - self._beat_interval) * 1000  # ms
+                print(f"[beat]   Expected interval: {self._beat_interval:.3f}s (@ {self._estimated_bpm:.1f} BPM)")
                 print(f"[beat]   Deviation: {deviation:+.0f}ms")
             else:
                 print(f"[beat]   BPM not yet estimated")
@@ -491,10 +603,9 @@ class BeatDetector:
             current_time: Current absolute timestamp
             beat_detected: Whether a beat was detected
         """
-        if self._tempo_state == "stable" and self._estimated_bpm is not None:
-            # Stable tempo: use half-beat interval (refractory period)
-            beat_interval = 60.0 / self._estimated_bpm
-            next_interval = max(beat_interval, self.min_interval_seconds)
+        if self._tempo_state == "stable" and self._beat_interval is not None:
+            # Stable tempo: use beat interval (refractory period)
+            next_interval = max(self._beat_interval, self.min_interval_seconds)
         else:
             # Unstable tempo: poll frequently to catch next beat quickly
             next_interval = self.min_interval_seconds
@@ -572,7 +683,7 @@ class BeatDetector:
 
         return beat_detected, self._estimated_bpm
 
-    def get_prediction_state(self) -> Optional[Tuple[float, float, float]]:
+    def get_prediction_state(self) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         """
         Get state information for predictive beat generation.
 
@@ -580,24 +691,29 @@ class BeatDetector:
         This enables low-latency beat prediction by extrapolating from recent beats.
 
         Returns:
-            Tuple of (last_beat_timestamp, beat_interval, tempo_bpm) if stable with ≥4 beats,
-            None otherwise
+            Tuple of (last_beat_timestamp, beat_interval, tempo_bpm) when all conditions met:
+            - At least 4 beats in history
+            - Tempo state is "stable"
+            - beat_interval is cached (not None)
 
-        Thread-safety note: Caller should handle locking if accessed from multiple threads.
+            Returns (None, None, None) if any condition fails (unstable or insufficient data)
+
+        Thread-safety note: Not internally locked. Caller should handle synchronization
+        if accessed from multiple threads.
         """
         # Need at least 4 beats and stable tempo for reliable predictions
-        if len(self._beat_history) >= 4 and self._tempo_state == "stable" and self._estimated_bpm is not None:
+        if len(self._beat_history) >= 4 and self._tempo_state == "stable" and self._beat_interval is not None:
             last_beat_timestamp = self._beat_history[-1]
-            beat_interval = 60.0 / self._estimated_bpm
-            return (last_beat_timestamp, beat_interval, self._estimated_bpm)
+            return (last_beat_timestamp, self._beat_interval, self._estimated_bpm)
         return None, None, None
 
     def reset(self) -> None:
         """Reset the beat detector state (useful for testing)."""
         with self._buffer_lock:
             self._buffer.clear()
-        self._last_reported_beat = -999.0
+        self._last_reported_beat = _NO_BEAT_SENTINEL
         self._estimated_bpm = None
+        self._beat_interval = None
         self._next_process_time = time.time()  # Absolute timestamp
         self._beat_history.clear()
         self._consecutive_rejections = 0

@@ -58,7 +58,7 @@ cobeart = [
     "pygame",
     # Note: madmom is required for beat detection but must be installed from source
     # Install from the madmom/ directory with: pip install -e ./madmom
-    # See cobeart/audiocapture/BEAT_DETECTION.md for details
+    # See beat detector module docstrings for implementation details
 ]
 
 [project.scripts]
