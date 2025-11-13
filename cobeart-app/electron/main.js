@@ -98,6 +98,7 @@ function createWindow(shader, usePerfMode) {
     useContentSize: true,
     backgroundColor: '#000000',
     autoHideMenuBar: true,
+    show: false, // Don't show window until it's ready
     webPreferences: {
       // The preload script is a bridge between Electron's Node.js environment
       // and the sandboxed browser environment of the window, allowing for
@@ -121,15 +122,29 @@ function createWindow(shader, usePerfMode) {
   } else if (shader === 'mixed') {
     url = `http://127.0.0.1:${PORT}/composite/`;
   }
-  win.loadURL(url);
-  //Opening devtools breaks ink visualization
-  // Only open webtools if shader is not 'ink'
-  if (shader !== 'ink') {
-    win.webContents.openDevTools();
-  };
+  // Wait for the window to be ready before opening DevTools and injecting variables
   win.webContents.on('did-finish-load', () => {
     win.webContents.executeJavaScript(`window.__SOCKET_PORT__=${PORT}`);
+
+    // Show window once content is loaded to prevent GPU errors
+    win.show();
+
+    // Opening devtools breaks ink visualization
+    // Only open devtools if shader is not 'ink', and do it after page load
+    if (shader !== 'ink') {
+      // Small delay to ensure page is fully initialized
+      setTimeout(() => {
+        win.webContents.openDevTools();
+      }, 100);
+    }
   });
+
+  // Handle the case where the window is ready before content loads
+  win.once('ready-to-show', () => {
+    // Window is ready to be shown, but we'll wait for did-finish-load
+  });
+
+  win.loadURL(url);
 }
 
 // Electron's initialization is asynchronous. This block executes once the app is ready.

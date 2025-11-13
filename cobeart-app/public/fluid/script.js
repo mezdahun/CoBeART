@@ -22,6 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+import backgroundRegistry from '../backgrounds/registry.js';
+
 'use strict';
 
 // Mobile promo section
@@ -85,7 +87,8 @@ let config = {
     SUNRAYS_RESOLUTION: 196,
     SUNRAYS_WEIGHT: 0.5,
     SHOW_BACKGROUND: false,
-    DYNAMIC_CONFIG: false
+    DYNAMIC_CONFIG: false,
+    BACKGROUND_INDEX: 0
 }
 
 // Definition of single pointer in canvas
@@ -225,6 +228,10 @@ function startGUI() {
     gui.add(config, 'COLORFUL').name('colorful');
     gui.add(config, 'PAUSED').name('paused').listen();
     gui.add(config, 'SHOW_BACKGROUND').name('show background');
+
+    const bgOptions = {};
+    backgroundRegistry.forEach((bg, i) => { bgOptions[bg.name] = i; });
+    gui.add(config, 'BACKGROUND_INDEX', bgOptions).name('background');
 
     gui.add({
         fun: () => {
@@ -634,174 +641,6 @@ const displayShaderSource = `
     }
 `;
 
-// COMMENTED OUT: Original starry background shader from https://www.shadertoy.com/view/tllfRX
-/*
-const originalBackgroundShaderSource = `
-    precision highp float;
-    varying vec2 vUv; // Passed by the vertex shader, represents coordinates from 0.0 to 1.0
-
-    // Uniforms to receive data from JavaScript, matching the Shadertoy format
-    uniform vec3      iResolution;           // viewport resolution (in pixels)
-    uniform float     iTime;                 // shader playback time (in seconds)
-
-    #define NUM_LAYERS 8.
-    #define TAU 6.28318
-    #define PI 3.141592
-    #define Velocity .025 //modified value to increse or decrease speed, negative value travel backwards
-    #define StarGlow 0.025
-    #define StarSize 02.
-    #define CanvasView 20.
-
-
-    float Star(vec2 uv, float flare){
-        float d = length(uv);
-        float m = sin(StarGlow*1.2)/d;  
-        float rays = max(0., .5-abs(uv.x*uv.y*1000.)); 
-        m += (rays*flare)*2.;
-        m *= smoothstep(1., .1, d);
-        return m;
-    }
-
-    float Hash21(vec2 p){
-        p = fract(p*vec2(123.34, 456.21));
-        p += dot(p, p+45.32);
-        return fract(p.x*p.y);
-    }
-
-
-    vec3 StarLayer(vec2 uv){
-        vec3 col = vec3(0);
-        vec2 gv = fract(uv);
-        vec2 id = floor(uv);
-        for(int y=-1;y<=1;y++){
-            for(int x=-1; x<=1; x++){
-                vec2 offs = vec2(x,y);
-                float n = Hash21(id+offs);
-                float size = fract(n);
-                float star = Star(gv-offs-vec2(n, fract(n*34.))+.5, smoothstep(.1,.9,size)*.46);
-                vec3 color = sin(vec3(.2,.3,.9)*fract(n*2345.2)*TAU)*.25+.75;
-                color = color*vec3(.9,.59,.9+size);
-                star *= sin(iTime*.6+n*TAU)*.5+.5;
-                col += star*size*color;
-            }
-        }
-        return col;
-    }
-
-    // This is the main function adapted from Shadertoy's 'mainImage'
-    void mainImage( out vec4 fragColor, in vec2 fragCoord )
-    {
-        vec2 uv = (fragCoord-.5*iResolution.xy)/iResolution.y;
-        vec2 M = vec2(0);
-        M -= vec2(M.x+sin(iTime*0.22), M.y-cos(iTime*0.22));
-        float t = iTime*Velocity; 
-        vec3 col = vec3(0);  
-        for(float i=0.; i<1.; i+=1./NUM_LAYERS){
-            float depth = fract(i+t);
-            float scale = mix(CanvasView, .5, depth);
-            float fade = depth*smoothstep(1.,.9,depth);
-            col += StarLayer(uv*scale+i*453.2-iTime*.05+M)*fade;}   
-        fragColor = vec4(col,1.0);
-    }
-
-    // The main entry point for the fragment shader
-    void main() {
-        // We call the adapted Shadertoy main function, providing the required outputs and inputs.
-        mainImage(gl_FragColor, gl_FragCoord.xy);
-    }
-`;
-*/
-
-// NEW: Shadertoy shader from https://www.shadertoy.com/view/XXyGzh
-const backgroundShaderSource = `
-    precision highp float;
-    varying vec2 vUv; // Passed by the vertex shader, represents coordinates from 0.0 to 1.0
-
-    // Uniforms to receive data from JavaScript, matching the Shadertoy format
-    uniform vec3      iResolution;           // viewport resolution (in pixels)
-    uniform float     iTime;                 // shader playback time (in seconds)
-    uniform float     iTimeDelta;            // render time (in seconds)
-    uniform float     iFrameRate;            // shader frame rate
-    uniform int       iFrame;                // shader playback frame
-    uniform float     iChannelTime[4];       // channel playback time (in seconds)
-    uniform vec3      iChannelResolution[4]; // channel resolution (in pixels)
-    uniform vec4      iMouse;                // mouse pixel coords. xy: current (if MLB down), zw: click
-    uniform vec4      iDate;                 // (year, month, day, time in seconds)
-    uniform float     iSampleRate;           // sound sample rate (i.e., 44100)
-
-    // Custom tanh implementation for WebGL compatibility
-    float tanh_custom(float x) {
-        float e2x = exp(2.0 * x);
-        return (e2x - 1.0) / (e2x + 1.0);
-    }
-    
-    vec2 tanh_custom(vec2 v) {
-        return vec2(tanh_custom(v.x), tanh_custom(v.y));
-    }
-    
-    // Helper function from COMMON section
-    vec2 stanh(vec2 a) {
-        return tanh_custom(clamp(a, -40., 40.));
-    }
-
-    // This is the main function adapted from Shadertoy's 'mainImage'
-    void mainImage( out vec4 o, vec2 u )
-    {
-        vec2 v = iResolution.xy;
-        // Proper Shadertoy coordinate transformation
-        u = 0.2 * (u + u - v) / v.y;
-             
-        vec4 z = o = vec4(1,2,3,0); // Restore original colorful base
-         
-        float a = 0.5;
-        float t = iTime;
-        vec4 matVec;
-        
-        for (float i = 0.0; i < 19.0; i += 1.0) {
-             o += (1. + cos(z+t)) 
-                / length((1.+i*dot(v,v)) 
-                       * sin(1.5*u/(0.5-dot(u,u)) - 9.*u.yx + t));
-             
-            t += 1.0;
-            v = cos(t - 7.*u*pow(a, i)) - 5.*u;
-            a += 0.03;
-            
-            // Use stanh here as recommended for black artifacts
-            matVec = cos(i + .02*t - vec4(0,11,33,0));
-            u *= mat2(matVec.x, matVec.y, matVec.z, matVec.w);
-            u += stanh(40. * dot(u, u) * cos(1e2*u.yx + t) * vec2(1.0)) / 2e2
-               + .2 * a * u
-               + cos(4./exp(dot(o,o)/1e2) + t) / 3e2;
-        }
-                  
-         o = 25.6 / (min(o, vec4(13.)) + 164. / o) 
-           - dot(u, u) / 250.;
-           
-         // Target only the slow oscillating background, preserve fast electric streaks
-         float maxComponent = max(max(o.r, o.g), o.b);
-         float colorVariation = maxComponent - min(min(o.r, o.g), o.b);
-         
-         // Electric effects have high intensity and high color variation
-         float electricMask = smoothstep(0.4, 1.0, maxComponent) * smoothstep(0.1, 0.5, colorVariation);
-         
-         // Make clouds much darker
-         float gray = dot(o.rgb, vec3(0.299, 0.587, 0.114));
-         vec3 darkClouds = vec3(gray * 0.1); // Much darker clouds (was 0.3, now 0.1)
-         
-         // Boost electric effects brightness
-         vec3 brightElectric = o.rgb * 1.4; // Boost brightness by 40%
-         
-         // Mix: very dark clouds with bright electric effects
-         o.rgb = mix(darkClouds, brightElectric, electricMask);
-    }
-
-    // The main entry point for the fragment shader
-    void main() {
-        // We call the adapted Shadertoy main function, providing the required outputs and inputs.
-        mainImage(gl_FragColor, gl_FragCoord.xy);
-    }
-`;
-
 const bloomPrefilterShader = compileShader(gl.FRAGMENT_SHADER, `
     precision mediump float;
     precision mediump sampler2D;
@@ -1166,7 +1005,10 @@ const vorticityProgram = new Program(baseVertexShader, vorticityShader);
 const pressureProgram = new Program(baseVertexShader, pressureShader);
 const gradienSubtractProgram = new Program(baseVertexShader, gradientSubtractShader);
 
-const backgroundProgram = new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, backgroundShaderSource));
+// Compile all background shaders from the registry
+const backgroundPrograms = backgroundRegistry.map(bg =>
+  new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, bg.fragmentShader))
+);
 
 const displayMaterial = new Material(baseVertexShader, displayShaderSource);
 
@@ -1566,9 +1408,23 @@ function render(target, elapsedTime) {
 }
 
 function drawBackground(target, elapsedTime) {
-    backgroundProgram.bind();
-    gl.uniform3f(backgroundProgram.uniforms.iResolution, canvas.width, canvas.height, 1.0);
-    gl.uniform1f(backgroundProgram.uniforms.iTime, elapsedTime * 0.25); // Slow down time by 75%
+    const currentProgram = backgroundPrograms[config.BACKGROUND_INDEX];
+    const bgDef = backgroundRegistry[config.BACKGROUND_INDEX];
+
+    currentProgram.bind();
+
+    // Set uniforms based on which background is active
+    if (bgDef.name === 'Electric Clouds') {
+        gl.uniform3f(currentProgram.uniforms.iResolution, canvas.width, canvas.height, 1.0);
+        gl.uniform1f(currentProgram.uniforms.iTime, elapsedTime * 0.25); // Slow down time by 75%
+    } else if (bgDef.name === 'Circles') {
+        gl.uniform1f(currentProgram.uniforms.time, elapsedTime);
+        gl.uniform2f(currentProgram.uniforms.resolution, canvas.width, canvas.height);
+        gl.uniform1f(currentProgram.uniforms.circle_size, 1.59);
+        gl.uniform3f(currentProgram.uniforms.fill_color, 0.948, 0.133, 0.185);
+        gl.uniform3f(currentProgram.uniforms.grad_color, 0.995, 0.834, 0.0);
+    }
+
     blit(target);
 }
 
@@ -1798,6 +1654,10 @@ window.addEventListener('keydown', e => {
         config.PAUSED = !config.PAUSED;
     if (e.key === ' ')
         splatStack.push(parseInt(Math.random() * 20) + 5);
+    if (e.key === 'b' || e.key === 'B') {
+        config.BACKGROUND_INDEX = (config.BACKGROUND_INDEX + 1) % backgroundRegistry.length;
+        console.log('Switched to background:', backgroundRegistry[config.BACKGROUND_INDEX].name);
+    }
 });
 
 // Make external messages (postMessage) act like mouse drags.
