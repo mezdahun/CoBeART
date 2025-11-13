@@ -15,7 +15,7 @@ except Exception:
 class AudioCapturer:
     """A class to capture audio from a user-selected input device."""
 
-    def __init__(self, chunk_size=1024, sample_rate=48000, spectrum_bins=128, spectrum_history=16, enable_beat_detection=False, debug=False):
+    def __init__(self, chunk_size=1024, sample_rate=48000, spectrum_bins=128, spectrum_history=16, enable_beat_detection=False, enable_emit=False, socketio_url=None, socketio_namespace="/audio", debug=False):
         """
         Initializes the AudioCapturer by selecting a device.
         A larger chunk_size (e.g., 1024) is better for frequency resolution of metrics.
@@ -51,6 +51,20 @@ class AudioCapturer:
 
         # Pre-compute Hanning window for FFT
         self._window = np.hanning(chunk_size)
+
+        # Pre-compute FFT frequency bins (constant for given chunk_size and sample_rate)
+        self._fft_freqs = np.fft.rfftfreq(self.chunk_size, 1.0 / self.sample_rate)
+
+        # Pre-compute logarithmically-spaced frequency bins for spectrum (never changes)
+        self._log_freq_bins = np.logspace(
+            np.log10(max(self.freq_min, 1.0)),
+            np.log10(min(self.freq_max, self.sample_rate / 2)),
+            self.spectrum_bins + 1
+        )
+
+        # Pre-allocate workspace arrays for spectrum computation
+        self._spectrum_workspace = np.zeros(self.spectrum_bins, dtype=np.float32)
+        self._fft_freqs_spectrum = np.fft.rfftfreq(self.chunk_size, 1.0 / self.sample_rate)
 
         # Spectrum history buffer (ring buffer)
         self._spectrum_buffer = np.zeros((spectrum_history, spectrum_bins), dtype=np.float32)
@@ -89,6 +103,18 @@ class AudioCapturer:
         self._onset_flux_history_size = 50      # ~1.7 seconds at 30Hz
         self._onset_threshold_multiplier = 2.5  # Must exceed 2.5x average flux
         self._onset_minimum_flux = 0.3          # Absolute minimum to prevent noise
+
+        # Socket.IO emission (optional)
+        self.enable_emit = enable_emit
+        self._emitter = None
+
+        if self.enable_emit:
+            from cobeart.audiocapture.emitter import AudioEmitter
+            self._emitter = AudioEmitter(
+                socketio_url=socketio_url,
+                namespace=socketio_namespace
+            )
+            print(f"[audio] Emitter initialized for {socketio_namespace}")
 
         if self.enable_beat_detection:
             try:
@@ -155,6 +181,13 @@ class AudioCapturer:
                         # Feed to beat detector if enabled
                         if self.enable_beat_detection and self._beat_detector is not None:
                             self._beat_detector.add_chunk(block[:n] if n < self.chunk_size else block[-self.chunk_size:])
+
+                        # Compute metrics and push to emitter immediately (if enabled)
+                        if self.enable_emit and self._emitter is not None:
+                            frame_data = self._ring.copy()  # Get copy for metrics computation
+                            payload = self.compute_metrics_payload(frame_data)
+                            if payload is not None:
+                                self._emitter.push_metrics(payload)
             except Exception:
                 pass
 
@@ -204,6 +237,8 @@ class AudioCapturer:
         if self._beat_processing_thread is not None:
             self._beat_processing_thread.join(timeout=1.0)
             self._beat_processing_thread = None
+        if self._emitter is not None:
+            self._emitter.stop()
         self.is_recording = False
         print("Audio stream stopped.")
 
@@ -234,14 +269,12 @@ class AudioCapturer:
         n = len(data)
         if n == 0:
             return 0.0
-        window = np.hanning(n)
-        spectrum = np.fft.rfft(data * window)
-        freqs = np.fft.rfftfreq(n, 1.0 / self.sample_rate)
+        spectrum = np.fft.rfft(data * self._window)
         magnitudes = np.abs(spectrum)
         if magnitudes.size == 0:
             return 0.0
         peak_index = int(np.argmax(magnitudes))
-        return float(freqs[peak_index])
+        return float(self._fft_freqs[peak_index])
 
     def get_rms_db(self, data, min_db=-60.0, max_db=0.0):
         """
@@ -349,8 +382,8 @@ class AudioCapturer:
             - is_onset: Boolean indicating if an onset was detected
             - onset_strength: Float indicating onset magnitude relative to threshold
         """
-        # Get current spectrum (don't update history to avoid side effects)
-        current_spectrum = self.get_spectrum(data, update_history=False)
+        # Get current spectrum and update history buffer
+        current_spectrum = self.get_spectrum(data, update_history=True)
 
         # Need previous spectrum for comparison
         if self._last_spectrum_for_onset is None:
@@ -403,47 +436,47 @@ class AudioCapturer:
         # Apply window and compute FFT
         windowed = data * self._window
         fft_result = np.fft.rfft(windowed)
-        fft_freqs = np.fft.rfftfreq(n, 1.0 / self.sample_rate)
         fft_magnitudes = np.abs(fft_result)
 
-        # Create logarithmically-spaced frequency bins (perceptually better)
-        # This maps low frequencies to more bins (bass) and high frequencies to fewer bins (treble)
-        log_freq_bins = np.logspace(
-            np.log10(max(self.freq_min, 1.0)),
-            np.log10(min(self.freq_max, self.sample_rate / 2)),
-            self.spectrum_bins + 1
-        )
+        # Use pre-allocated workspace
+        spectrum = self._spectrum_workspace
+        spectrum.fill(0.0)
 
-        # Map FFT bins to our custom bins
-        spectrum = np.zeros(self.spectrum_bins, dtype=np.float32)
+        # Map FFT bins to logarithmic bins using binary search (faster than boolean masks)
         for i in range(self.spectrum_bins):
-            # Find FFT bins within this frequency range
-            freq_low = log_freq_bins[i]
-            freq_high = log_freq_bins[i + 1]
-            mask = (fft_freqs >= freq_low) & (fft_freqs < freq_high)
+            freq_low = self._log_freq_bins[i]
+            freq_high = self._log_freq_bins[i + 1]
 
-            if np.any(mask):
-                # Average magnitude in this frequency band
-                spectrum[i] = np.mean(fft_magnitudes[mask])
+            # Use searchsorted for O(log n) binary search instead of O(n) boolean mask
+            idx_low = np.searchsorted(self._fft_freqs_spectrum, freq_low, side='left')
+            idx_high = np.searchsorted(self._fft_freqs_spectrum, freq_high, side='right')
 
-        # Normalize using log scale for better visual range
+            if idx_high > idx_low:
+                # Direct slice instead of boolean mask (faster, no allocation)
+                spectrum[i] = np.mean(fft_magnitudes[idx_low:idx_high])
+
+        # Normalize using log scale for better visual range (in-place operations)
         # Add small epsilon to avoid log(0)
-        spectrum = np.log10(spectrum + 1e-10)
+        np.log10(spectrum + 1e-10, out=spectrum)
         # Map to [0, 1] range (assuming typical audio range)
-        spectrum = np.clip((spectrum + 10.0) / 10.0, 0.0, 1.0)
+        spectrum += 10.0
+        spectrum /= 10.0
+        np.clip(spectrum, 0.0, 1.0, out=spectrum)
 
-        # Apply temporal smoothing (attack/decay)
+        # Apply temporal smoothing (attack/decay) - in-place
         alpha = self._spectrum_smoothing
-        spectrum = alpha * spectrum + (1.0 - alpha) * self._last_spectrum
-        self._last_spectrum = spectrum.copy()
+        spectrum *= alpha
+        spectrum += (1.0 - alpha) * self._last_spectrum
+        self._last_spectrum[:] = spectrum  # In-place copy
 
         # Update history buffer
         if update_history:
             with self._spectrum_lock:
-                self._spectrum_buffer[self._spectrum_index] = spectrum
+                self._spectrum_buffer[self._spectrum_index] = spectrum.copy()
                 self._spectrum_index = (self._spectrum_index + 1) % self.spectrum_history
 
-        return spectrum
+        # Return copy since we reuse workspace
+        return spectrum.copy()
 
     def get_spectrum_2d(self):
         """
@@ -484,10 +517,56 @@ class AudioCapturer:
 
         return self._beat_predictor.get_next_beat()
 
+    def compute_metrics_payload(self, data):
+        """
+        Compute all audio metrics from a data chunk.
+
+        Args:
+            data: Audio samples (numpy array)
+
+        Returns:
+            Dictionary with all computed metrics, or None if data is invalid
+        """
+        if data is None or data.size == 0:
+            return None
+
+        # Compute all metrics from this frame
+        rms = self.get_rms(data)
+        rms_db = self.get_rms_db(data)
+        is_peak, peak_intensity = self.detect_rms_peak(rms)
+        is_onset, onset_strength = self.detect_onset(data)
+        beat, tempo_bpm, beat_timestamp = self.has_beat()
+
+        # Note that is_peak, is_onset, and beat are explicitly cast to bools to ensure they are JSON serializable.
+        return {
+            "rms": float(rms),
+            "peak": float(self.get_peak_amplitude(data)),
+            "zcr": float(self.get_zero_crossing_rate(data)),
+            "dominant_frequency": float(self.get_dominant_frequency(data)),
+            "rms_db": float(rms_db),
+            "rms_envelope": float(self.get_rms_envelope(rms_db)),
+            "is_peak": bool(is_peak),
+            "peak_intensity": float(peak_intensity),
+            "is_onset": bool(is_onset),
+            "onset_strength": float(onset_strength),
+            "spectrum_2d": self.get_spectrum_2d().tolist(),
+            "spectrum_config": {
+                "width": self.spectrum_bins,
+                "height": self.spectrum_history,
+                "freq_min": self.freq_min,
+                "freq_max": self.freq_max,
+            },
+            "beat": bool(beat),
+            "tempo_bpm": tempo_bpm if tempo_bpm is not None else None,
+            "beat_timestamp": beat_timestamp if beat_timestamp is not None else None,
+        }
+
 def main():
-    """Main function to test audio capture and metrics."""
+    """Main function to run audio capture with optional Socket.IO emission."""
     import argparse
-    parser = argparse.ArgumentParser(description="Capture and display audio metrics")
+    parser = argparse.ArgumentParser(
+        description="Capture audio and compute metrics with optional Socket.IO emission"
+    )
     parser.add_argument(
         "--enable-beat-detection",
         action="store_true",
@@ -498,18 +577,40 @@ def main():
         action="store_true",
         help="Enable debug logging for beat detection"
     )
+    parser.add_argument(
+        "--emit",
+        action="store_true",
+        help="Enable Socket.IO emission of audio metrics (emits at capture rate ~100 Hz)"
+    )
+    parser.add_argument(
+        "--socketio-url",
+        type=str,
+        default=None,
+        help="Socket.IO server URL (default: http://localhost:3000)"
+    )
+    parser.add_argument(
+        "--socketio-namespace",
+        type=str,
+        default="/audio",
+        help="Socket.IO namespace (default: /audio)"
+    )
     args = parser.parse_args()
 
-    # Use 1024 as the default for metrics to get better frequency resolution.
+    # Create capturer with optional emission
     capturer = AudioCapturer(
         chunk_size=1024,
         enable_beat_detection=args.enable_beat_detection,
+        enable_emit=args.emit,
+        socketio_url=args.socketio_url,
+        socketio_namespace=args.socketio_namespace,
         debug=args.debug
     )
     capturer.start_stream()
 
     if args.enable_beat_detection:
         print("Beat detection enabled")
+    if args.emit:
+        print(f"Socket.IO emission enabled at capture rate (~100 Hz) to {args.socketio_namespace}")
     print("Reading audio metrics... Press Ctrl+C to stop.")
 
     try:

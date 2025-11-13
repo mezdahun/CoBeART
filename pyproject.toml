@@ -63,7 +63,6 @@ cobeart = [
 
 [project.scripts]
 start-optitrack-client = "cobeart.optitrackclient.start_client:start"
-start-audio-client = "cobeart.audiocapture.capture:main"
 
 [project.urls]
 Homepage = "https://github.com/mezdahun/CoBeART"

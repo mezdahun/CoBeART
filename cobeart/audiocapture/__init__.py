@@ -1,9 +1,9 @@
 from .capture import AudioCapturer
-from .emitter import AudioMetricsEmitter
+from .emitter import AudioEmitter
 
 __all__ = [
     "AudioCapturer",
-    "AudioMetricsEmitter",
+    "AudioEmitter",
 ]
 
 
