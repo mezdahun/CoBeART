@@ -1423,6 +1423,14 @@ function drawBackground(target, elapsedTime) {
         gl.uniform1f(currentProgram.uniforms.circle_size, 1.59);
         gl.uniform3f(currentProgram.uniforms.fill_color, 0.948, 0.133, 0.185);
         gl.uniform3f(currentProgram.uniforms.grad_color, 0.995, 0.834, 0.0);
+    } else if (bgDef.name === 'Zephyr') {
+        gl.uniform1f(currentProgram.uniforms.time, elapsedTime);
+        gl.uniform2f(currentProgram.uniforms.resolution, canvas.width, canvas.height);
+        gl.uniform1f(currentProgram.uniforms.scaling, 0.7);
+        gl.uniform1f(currentProgram.uniforms.calm, 1.0);
+        gl.uniform1f(currentProgram.uniforms.contrast, 1.1);
+        gl.uniform3f(currentProgram.uniforms.color1, 0.9, 0.7, 0.2); // Warm gold
+        gl.uniform3f(currentProgram.uniforms.color2, 0.3, 0.7, 1.0); // Cool cyan
     }
 
     blit(target);
@@ -1654,8 +1662,14 @@ window.addEventListener('keydown', e => {
         config.PAUSED = !config.PAUSED;
     if (e.key === ' ')
         splatStack.push(parseInt(Math.random() * 20) + 5);
-    if (e.key === 'b' || e.key === 'B') {
-        config.BACKGROUND_INDEX = (config.BACKGROUND_INDEX + 1) % backgroundRegistry.length;
+    if (e.key === 'g' || e.key === 'G') {
+        if (e.shiftKey) {
+            // Shift+G: cycle backwards
+            config.BACKGROUND_INDEX = (config.BACKGROUND_INDEX - 1 + backgroundRegistry.length) % backgroundRegistry.length;
+        } else {
+            // G: cycle forwards
+            config.BACKGROUND_INDEX = (config.BACKGROUND_INDEX + 1) % backgroundRegistry.length;
+        }
         console.log('Switched to background:', backgroundRegistry[config.BACKGROUND_INDEX].name);
     }
 });

@@ -1,0 +1,45 @@
+/* Magenta neon border with glow effect - toggleable with 'B' key */
+
+.neon-border-wrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0;
+    transition: opacity 0.3s ease-in-out;
+}
+
+.neon-border-wrapper.visible {
+    opacity: 1;
+}
+
+.neon-border {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    right: 15px;
+    bottom: 15px;
+    border: 10px solid #FFFFFF;
+    border-radius: 15px;
+    /* Pure white: #FFFFFF or rgb(255, 255, 255) */
+
+    /* Blur filter for soft, diffuse edges */
+    filter: blur(2px);
+
+    /* Multi-layer box-shadow for diffuse neon glow effect */
+    box-shadow:
+        /* Inner glow layers - max 30px inward */
+        inset 0 0 10px rgba(255, 255, 255, 1),
+        inset 0 0 20px rgba(255, 255, 255, 0.8),
+        inset 0 0 30px rgba(255, 255, 255, 0.5),
+
+        /* Outer glow layers - max 30px outward */
+        0 0 10px rgba(255, 255, 255, 0.9),
+        0 0 20px rgba(255, 255, 255, 0.6),
+        0 0 30px rgba(255, 255, 255, 0.3);
+}

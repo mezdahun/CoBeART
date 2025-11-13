@@ -3,8 +3,10 @@
 
 import electricClouds from './electric-clouds/shader.js';
 import circles from './circles/shader.js';
+import zephyr from './zephyr/shader.js';
 
 export default [
   electricClouds,
-  circles
+  circles,
+  zephyr
 ];

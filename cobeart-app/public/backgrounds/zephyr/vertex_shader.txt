@@ -1,0 +1,4 @@
+/* https://editor.isf.video/shaders/5e7a801d7c113618206deaf7 */
+void main() {
+	isf_vertShaderInit();
+}
