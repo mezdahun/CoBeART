@@ -1810,6 +1810,8 @@ window.addEventListener('keydown', e => {
     // so molten reacts immediately; fluid receives splats for ALL bodies.
     let bodyPartsIndex = {};
     let trackedBodyParts = [];
+    let objectIDs = [];
+    let trackedObjects = {};
     fetch('/body_map.json')
       .then(response => response.json())
       .then(data => {
@@ -1824,6 +1826,16 @@ window.addEventListener('keydown', e => {
               bodyPartsIndex['right_foot']
               ];
           console.log("Tracking body parts IDs: ", trackedBodyParts);
+          //PATTERN 10 params
+          console.log("OBJECT bodyPartsIndex[stick]: ", bodyPartsIndex['stick']);
+          objectIDs.push(bodyPartsIndex['stick']);
+          objectIDs.push(bodyPartsIndex['ball']);
+          objectIDs.push(bodyPartsIndex['object']);
+          console.log("OBJECT Tracking object IDs: ", objectIDs);
+          for (const objID of objectIDs) {
+              trackedObjects[objID] = false;
+          }
+          console.log("OBJECT Initialized trackedObjects: ", trackedObjects);
         }
       })
       .catch(error => {
@@ -1945,7 +1957,7 @@ window.addEventListener('keydown', e => {
 
         // Pattern parameters
         const dynRadiusBelowZ = 1800; // z below which splat radius increases
-        const maxSplatRadius = 2.5; // maximum splat radius
+        const maxSplatRadius = 0.5; // maximum splat radius
         const minSplatRadius = 0.08; // minimum splat radius
 
 
@@ -1980,6 +1992,59 @@ window.addEventListener('keydown', e => {
                 }
             }
             //console.log("Setting BLOOM_INTENSITY to ", config.BLOOM_INTENSITY);
+        }
+
+        // PATTERN 10: Using objects, e.g. if m.id in stick, rope or object
+        // First we check if any of the objects are closer to the right hand than 200, if so, we turn on tracking for them
+        let turnOnDistance = 300;
+        for (const objID of objectIDs) {
+            if (m.id === objID) {
+                console.log("OBJECT Checking distances for object ID ", objID);
+                const objPos = [m.x, m.y, m.z];
+                const rightHandPos = rightHandBefore.length === 3 ? rightHandBefore : null;
+                const leftHandPos = leftHandBefore.length === 3 ? leftHandBefore : null;
+                if (rightHandPos) {
+                    const distance = Math.sqrt(
+                        (objPos[0] - rightHandPos[0]) ** 2 +
+                        (objPos[1] - rightHandPos[1]) ** 2 +
+                        (objPos[2] - rightHandPos[2]) ** 2
+                    );
+                    console.log("OBJECT Distance between object ID ", objID, " and right hand: ", distance);
+                    if (distance < turnOnDistance) {
+                        console.log("OBJECT Turning ON tracking for object ID ", objID);
+                        trackedObjects[objID] = true;
+                    };
+                }
+                if (leftHandPos) {
+                    const distance = Math.sqrt(
+                        (objPos[0] - leftHandPos[0]) ** 2 +
+                        (objPos[1] - leftHandPos[1]) ** 2 +
+                        (objPos[2] - leftHandPos[2]) ** 2
+                    );
+                    if (distance < turnOnDistance) {
+                        console.log("OBJECT Turning OFF tracking for object ID ", objID);
+                        trackedObjects[objID] = false;
+                    };
+                }
+            }
+        }
+
+        // If the current tracked object is set to true, we set a bright color for it and make a splat
+        if (objectIDs.includes(m.id)) {
+            if (trackedObjects[m.id]) {
+            console.log("OBJECT ", m.id);
+                pointer.color = { r: 3.0, g: 3.0, b: 0.0 }; // bright yellow
+                //appendning id to trackedBodyParts if not already there
+                if (!trackedBodyParts.includes(m.id)) {
+                    trackedBodyParts.push(m.id);
+                }
+            } else {
+                // remove id from trackedBodyParts if exists
+                const index = trackedBodyParts.indexOf(m.id);
+                if (index > -1) {
+                    trackedBodyParts.splice(index, 1);
+                }
+            }
         }
 
         //PATTERN 3: Color Speed: change color according to linear velocity of the tracked object
@@ -2162,155 +2227,155 @@ window.addEventListener('keydown', e => {
             fallExplosionStarted = false;
         }
 
-        // PATTERN 7: Jump Ghosts: When jump is detected we generate a ghost splash (black color) striking through
-        // the center of mass of the hands in the direction of the jump
-        const jumpZThreshold = 400; // z above which a jump is detected
-        if (leftFootZBefore > jumpZThreshold &&
-            rightFootZBefore > jumpZThreshold) {
+//        // PATTERN 7: Jump Ghosts: When jump is detected we generate a ghost splash (black color) striking through
+//        // the center of mass of the hands in the direction of the jump
+//        const jumpZThreshold = 400; // z above which a jump is detected
+//        if (leftFootZBefore > jumpZThreshold &&
+//            rightFootZBefore > jumpZThreshold) {
+//
+//            if (!jumpGhostStarted && leftHandBefore.length === 3 && rightHandBefore.length === 3) {
+//                console.log("Jump detected initiation conditions met.");
+//                jumpGhostStarted = true;
+//                jumpGhostFinished = false;
+//                jumpGhostStartTime = Date.now();
+//
+//                // Center of mass of the hands (arena space)
+//                const centerX = (leftHandBefore[0] + rightHandBefore[0]) / 2;
+//                const centerY = (leftHandBefore[1] + rightHandBefore[1]) / 2;
+//
+//                // Direction of the jump from current foot position vs previous one
+//                let dirX = 0;
+//                let dirY = 1; // fallback
+//
+//                if (m.id === bodyPartsIndex['right_foot'] && rightFootBefore.length === 3) {
+//                    // posX, posY are the *current* arena coords of the right foot
+//                    dirX = m.x - rightFootBefore[0];
+//                    dirY = m.y - rightFootBefore[1];
+//                } else if (m.id === bodyPartsIndex['left_foot'] && leftFootBefore.length === 3) {
+//                    // same for left foot
+//                    dirX = m.x - leftFootBefore[0];
+//                    dirY = m.y - leftFootBefore[1];
+//                }
+//
+//                // Normalize
+//                let len = Math.sqrt(dirX * dirX + dirY * dirY);
+//                if (len < 1e-3) {
+//                    // If the movement vector is tiny, keep a simple default (straight up)
+//                    dirX = 0;
+//                    dirY = 1;
+//                    len = 1;
+//                }
+//                dirX /= len;
+//                dirY /= len;
+//
+//                // Find how far we can go inside the arena square [-arena_x, arena_x] x [-arena_y, arena_y]
+//                const tx = dirX !== 0 ? arena_x / Math.abs(dirX) : Infinity;
+//                const ty = dirY !== 0 ? arena_y / Math.abs(dirY) : Infinity;
+//                const tMax = Math.min(tx, ty);
+//
+//                // Farthest point "behind" the COM and the point "ahead" in jump direction
+//                const startArenaX = -dirX * tMax;
+//                const startArenaY = -dirY * tMax;
+//                const endArenaX   =  dirX * tMax;
+//                const endArenaY   =  dirY * tMax;
+//
+//                // Map arena → canvas coords using the same transform as everywhere else
+//                const norm_startX = (-startArenaX + arena_x) / (2 * arena_x);
+//                const norm_startY = ( startArenaY + arena_y) / (2 * arena_y);
+//                const norm_endX   = (-endArenaX   + arena_x) / (2 * arena_x);
+//                const norm_endY   = ( endArenaY   + arena_y) / (2 * arena_y);
+//
+//                jumpGhostSplashCoordinates = [[
+//                    norm_startX * canvas.clientWidth,
+//                    norm_startY * canvas.clientHeight
+//                ]];
+//
+//                jumpGhostTargets = [
+//                    norm_endX * canvas.clientWidth,
+//                    norm_endY * canvas.clientHeight
+//                ];
+//
+//                console.log("Jump detected! Starting jump ghost from ",
+//                    jumpGhostSplashCoordinates[0], " to ", jumpGhostTargets);
+//            }
+//        }
+//
+//        // Move and render the jump ghost
+//        if (jumpGhostStarted && !jumpGhostFinished &&
+//            (Date.now() - jumpGhostStartTime) > jumpGhostDT) {
+//
+//            console.log("Jump ghost at: ", jumpGhostSplashCoordinates);
+//
+//            jumpGhostSplashCoordinates.forEach((coord, index) => {
+//                const posXg = scaleByPixelRatio(coord[0]);
+//                const posYg = scaleByPixelRatio(coord[1]);
+//
+//                const dx = jumpGhostTargets[0] - coord[0];
+//                const dy = jumpGhostTargets[1] - coord[1];
+//                const dist = Math.sqrt(dx * dx + dy * dy);
+//                const normDist = Math.max(0, Math.min(dist / (2 * arena_x), 1.0));
+//
+//                const ghostId = 11000 + index; // dedicated ID for the ghost
+//                const ghostPointer = pointerForId(ghostId);
+//
+//                updatePointerDownData(ghostPointer, -1, posXg, posYg);
+//                // black "ghost" color
+//                ghostPointer.color = { r: 0.1, g: 0.1, b: 0.1 };
+//                updatePointerMoveData(ghostPointer, posXg, posYg);
+//
+//                // force the splat in case delta ends up 0
+//                ghostPointer.moved = true;
+//                // radius grows slightly as it approaches the center / target
+//                ghostPointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
+//
+//                console.log("Jump ghost pointer: ", ghostPointer);
+//            });
+//
+//            jumpGhostStartTime = Date.now();
+//
+//            // Move the ghost forward by a fixed distance towards the target
+//            jumpGhostSplashCoordinates = jumpGhostSplashCoordinates.map(coord => {
+//                const dx = jumpGhostTargets[0] - coord[0];
+//                const dy = jumpGhostTargets[1] - coord[1];
+//                const dist = Math.sqrt(dx * dx + dy * dy);
+//
+//                if (dist <= jumpGhostStep || dist === 0) {
+//                    jumpGhostFinished = true;
+//                    return [jumpGhostTargets[0], jumpGhostTargets[1]];
+//                }
+//
+//                const ux = dx / dist;
+//                const uy = dy / dist;
+//
+//                const newX = coord[0] + ux * jumpGhostStep;
+//                const newY = coord[1] + uy * jumpGhostStep;
+//
+//                return [newX, newY];
+//            });
+//        }
+//
+//        // Allow a new jump ghost once the current one is done and feet are back down
+//        if (jumpGhostFinished &&
+//            leftFootZBefore < jumpZThreshold &&
+//            rightFootZBefore < jumpZThreshold) {
+//            jumpGhostStarted = false;
+//        }
 
-            if (!jumpGhostStarted && leftHandBefore.length === 3 && rightHandBefore.length === 3) {
-                console.log("Jump detected initiation conditions met.");
-                jumpGhostStarted = true;
-                jumpGhostFinished = false;
-                jumpGhostStartTime = Date.now();
-
-                // Center of mass of the hands (arena space)
-                const centerX = (leftHandBefore[0] + rightHandBefore[0]) / 2;
-                const centerY = (leftHandBefore[1] + rightHandBefore[1]) / 2;
-
-                // Direction of the jump from current foot position vs previous one
-                let dirX = 0;
-                let dirY = 1; // fallback
-
-                if (m.id === bodyPartsIndex['right_foot'] && rightFootBefore.length === 3) {
-                    // posX, posY are the *current* arena coords of the right foot
-                    dirX = m.x - rightFootBefore[0];
-                    dirY = m.y - rightFootBefore[1];
-                } else if (m.id === bodyPartsIndex['left_foot'] && leftFootBefore.length === 3) {
-                    // same for left foot
-                    dirX = m.x - leftFootBefore[0];
-                    dirY = m.y - leftFootBefore[1];
-                }
-
-                // Normalize
-                let len = Math.sqrt(dirX * dirX + dirY * dirY);
-                if (len < 1e-3) {
-                    // If the movement vector is tiny, keep a simple default (straight up)
-                    dirX = 0;
-                    dirY = 1;
-                    len = 1;
-                }
-                dirX /= len;
-                dirY /= len;
-
-                // Find how far we can go inside the arena square [-arena_x, arena_x] x [-arena_y, arena_y]
-                const tx = dirX !== 0 ? arena_x / Math.abs(dirX) : Infinity;
-                const ty = dirY !== 0 ? arena_y / Math.abs(dirY) : Infinity;
-                const tMax = Math.min(tx, ty);
-
-                // Farthest point "behind" the COM and the point "ahead" in jump direction
-                const startArenaX = -dirX * tMax;
-                const startArenaY = -dirY * tMax;
-                const endArenaX   =  dirX * tMax;
-                const endArenaY   =  dirY * tMax;
-
-                // Map arena → canvas coords using the same transform as everywhere else
-                const norm_startX = (-startArenaX + arena_x) / (2 * arena_x);
-                const norm_startY = ( startArenaY + arena_y) / (2 * arena_y);
-                const norm_endX   = (-endArenaX   + arena_x) / (2 * arena_x);
-                const norm_endY   = ( endArenaY   + arena_y) / (2 * arena_y);
-
-                jumpGhostSplashCoordinates = [[
-                    norm_startX * canvas.clientWidth,
-                    norm_startY * canvas.clientHeight
-                ]];
-
-                jumpGhostTargets = [
-                    norm_endX * canvas.clientWidth,
-                    norm_endY * canvas.clientHeight
-                ];
-
-                console.log("Jump detected! Starting jump ghost from ",
-                    jumpGhostSplashCoordinates[0], " to ", jumpGhostTargets);
-            }
-        }
-
-        // Move and render the jump ghost
-        if (jumpGhostStarted && !jumpGhostFinished &&
-            (Date.now() - jumpGhostStartTime) > jumpGhostDT) {
-
-            console.log("Jump ghost at: ", jumpGhostSplashCoordinates);
-
-            jumpGhostSplashCoordinates.forEach((coord, index) => {
-                const posXg = scaleByPixelRatio(coord[0]);
-                const posYg = scaleByPixelRatio(coord[1]);
-
-                const dx = jumpGhostTargets[0] - coord[0];
-                const dy = jumpGhostTargets[1] - coord[1];
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                const normDist = Math.max(0, Math.min(dist / (2 * arena_x), 1.0));
-
-                const ghostId = 11000 + index; // dedicated ID for the ghost
-                const ghostPointer = pointerForId(ghostId);
-
-                updatePointerDownData(ghostPointer, -1, posXg, posYg);
-                // black "ghost" color
-                ghostPointer.color = { r: 0.1, g: 0.1, b: 0.1 };
-                updatePointerMoveData(ghostPointer, posXg, posYg);
-
-                // force the splat in case delta ends up 0
-                ghostPointer.moved = true;
-                // radius grows slightly as it approaches the center / target
-                ghostPointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
-
-                console.log("Jump ghost pointer: ", ghostPointer);
-            });
-
-            jumpGhostStartTime = Date.now();
-
-            // Move the ghost forward by a fixed distance towards the target
-            jumpGhostSplashCoordinates = jumpGhostSplashCoordinates.map(coord => {
-                const dx = jumpGhostTargets[0] - coord[0];
-                const dy = jumpGhostTargets[1] - coord[1];
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                if (dist <= jumpGhostStep || dist === 0) {
-                    jumpGhostFinished = true;
-                    return [jumpGhostTargets[0], jumpGhostTargets[1]];
-                }
-
-                const ux = dx / dist;
-                const uy = dy / dist;
-
-                const newX = coord[0] + ux * jumpGhostStep;
-                const newY = coord[1] + uy * jumpGhostStep;
-
-                return [newX, newY];
-            });
-        }
-
-        // Allow a new jump ghost once the current one is done and feet are back down
-        if (jumpGhostFinished &&
-            leftFootZBefore < jumpZThreshold &&
-            rightFootZBefore < jumpZThreshold) {
-            jumpGhostStarted = false;
-        }
-
-        //PATTERN 8: Pause Boom, Pause diffusion: of left-right hand distance smaller than 200
-        const pauseThreshold = 200; // distance below which we pause the fluid
-        if (leftHandBefore.length === 3 && rightHandBefore.length === 3) {
-            const distance = Math.sqrt(
-                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
-                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
-                (leftHandBefore[2] - rightHandBefore[2]) ** 2
-            );
-            if (distance < pauseThreshold) {
-                config.PAUSED = true;
-                //console.log("Pausing fluid due to hands closeness: ", distance);
-            } else {
-                config.PAUSED = false;
-            }
-        }
+//        //PATTERN 8: Pause Boom, Pause diffusion: of left-right hand distance smaller than 200
+//        const pauseThreshold = 200; // distance below which we pause the fluid
+//        if (leftHandBefore.length === 3 && rightHandBefore.length === 3) {
+//            const distance = Math.sqrt(
+//                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
+//                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
+//                (leftHandBefore[2] - rightHandBefore[2]) ** 2
+//            );
+//            if (distance < pauseThreshold) {
+//                config.PAUSED = true;
+//                //console.log("Pausing fluid due to hands closeness: ", distance);
+//            } else {
+//                config.PAUSED = false;
+//            }
+//        }
 
         //PATTERN 9: Head Tilt Color Palette Shift: changing the color palette slice according to the roll of the head
         // Head tilt color mode activation by moving right hand close to head
