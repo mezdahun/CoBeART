@@ -1864,6 +1864,9 @@ window.addEventListener('keydown', e => {
     let chestBackBefore = [];
     let leftHandBefore = [];
     let rightHandBefore = [];
+    let leftHandVelBefore = [];
+    let rightHandVelBefore = [];
+    let headBefore = [];
 
     // Defining an RGB color palette of yellow-orange-red-purple of 300 colors
     let colorPalette = [];
@@ -1908,6 +1911,9 @@ window.addEventListener('keydown', e => {
 
     //PATTERN 9 params
     let headTiltColorMode = false;
+
+    //PATTERN 11 params
+    let microsplatActive = false; // can be turned on by putting hands together above head
 
     window.addEventListener('message', (e) => {
         const m = e.data;
@@ -2407,6 +2413,128 @@ window.addEventListener('keydown', e => {
             }
         }
 
+        //PATTERN 11: Vertical hand swirl: when hand moves up or down quickly (vertical velocity component) we create swirl effect
+        // by adding N randomly moving short mini splats around the hand position
+        //params
+        const swirlVelocityThreshold = 2500; // velocity above which swirl is created
+        const numSwirlSplat = 5; // number of mini splats to create per update
+        const swirlSteps = 300; // number of steps to move the swirl splats
+        const moveOffsetSpeed = 35; // maximum offset radius during movement (how spread out sparkles are)
+
+        // Enabling microsplats mode by moving both hand down quickly reaching depth of 500
+        const microsplatHandDistanceThreshold = 1000; // distance below which microsplat mode is activated
+        const microsplatHandDepthThreshold = 500; // depth below which microsplat mode is activated
+        const microsplatVelocityThreshold = 2500; // vertical velocity above which microsplat mode is toggled
+        if (leftHandBefore.length === 3 && rightHandBefore.length === 3 && leftHandVelBefore.length === 3 && rightHandVelBefore.length === 3) {
+            const distanceBetweenHands = Math.sqrt(
+                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
+                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
+                (leftHandBefore[2] - rightHandBefore[2]) ** 2
+            );
+            const leftHandVz = leftHandVelBefore[2];
+            const rightHandVz = rightHandVelBefore[2];
+            const leftHandDepth = leftHandBefore[2];
+            const rightHandDepth = rightHandBefore[2];
+            const headDepth = headBefore.length === 3 ? headBefore[2] : 3000;
+            if (leftHandVz > microsplatVelocityThreshold && rightHandVz < -microsplatVelocityThreshold && !microsplatActive &&
+                distanceBetweenHands > microsplatHandDistanceThreshold && leftHandDepth > headDepth) {
+                console.log("MICROSPLAT ON");
+                microsplatActive = true;
+                // Signalling activeation by triggering microsplats  at head position
+                for (let i = 0; i < numSwirlSplat; i++) {
+                let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
+                let swirlPosXstart = normX * canvas.clientWidth;
+                let swirlPosYstart = normY * canvas.clientHeight;
+                const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                // Color based on direction of movement
+                swirlPointer.color = { r: 0.0, g: 1.0, b: 0.0 }; // cyan for upward
+                // Move the splat  like a firework away from the start position randomly in 100 step
+                let swirlPosX = swirlPosXstart;
+                let swirlPosY = swirlPosYstart;
+                for (let step = 0; step < swirlSteps; step++) {
+                    const offsetXMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                    const offsetYMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                    swirlPosX = swirlPosX + offsetXMove;
+                    swirlPosY = swirlPosY + offsetYMove;
+                    updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                    swirlPointer.moved = true; // force the splat
+                    swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                    }
+            }
+            } else if (leftHandVz < -microsplatVelocityThreshold && rightHandVz > microsplatVelocityThreshold && microsplatActive &&
+                       distanceBetweenHands > microsplatHandDistanceThreshold && rightHandDepth > headDepth) {
+                microsplatActive = false;
+                console.log("MICROSPLAT OFF");
+                // Signalling deactiveation by triggering microsplats  at head position
+                for (let i = 0; i < numSwirlSplat; i++) {
+                let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2 ) + arena_y) / (2 * arena_y);
+                let swirlPosXstart = normX * canvas.clientWidth;
+                let swirlPosYstart = normY * canvas.clientHeight;
+                const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                // Color based on direction of movement
+                swirlPointer.color = { r: 1.0, g: 0.0, b: 0.0 }; // cyan for upward
+                // Move the splat  like a firework away from the start position randomly in 100 step
+                let swirlPosX = swirlPosXstart;
+                let swirlPosY = swirlPosYstart;
+                for (let step = 0; step < swirlSteps; step++) {
+                    const offsetXMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                    const offsetYMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                    swirlPosX = swirlPosX + offsetXMove;
+                    swirlPosY = swirlPosY + offsetYMove;
+                    updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                    swirlPointer.moved = true; // force the splat
+                    swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                }
+                }
+              }
+
+        }
+
+        let activatedSwirlVelocityThreshold = 1600
+        let minVz = activatedSwirlVelocityThreshold;
+        let maxVz = 3500;
+        let dynNumSwirlSplatMax = 6;
+        // Carrying out microsplats if active
+        if (microsplatActive && (m.id === bodyPartsIndex['right_hand'] || m.id === bodyPartsIndex['left_hand'])) {
+            if (typeof m.vz === 'number') {
+                const vz = m.vz; // vertical velocity
+                if (Math.abs(vz) > activatedSwirlVelocityThreshold) {
+                    console.log("Creating swirl for hand ID ", m.id, " with vz ", vz);
+                    // calculating number of splats according to vz magnitude, normalizing between minVz and maxVz
+                    let dynNumSwirlSplat = Math.floor((Math.abs(m.vz) - minVz) / (maxVz - minVz) * dynNumSwirlSplatMax);
+                    for (let i = 0; i < dynNumSwirlSplat; i++) {
+                        let swirlPosXstart = posX;
+                        let swirlPosYstart = posY;
+                        const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                        updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                        // Color based on direction of movement
+                        if (vz > 0) {
+                            swirlPointer.color = { r: 0.0, g: 1.0, b: 1.0 }; // cyan for upward
+                        } else {
+                            swirlPointer.color = { r: 1.0, g: 0.0, b: 1.0 }; // magenta for downward
+                        }
+                        // Move the splat  like a firework away from the start position randomly in 100 step
+                        let swirlPosX = swirlPosXstart;
+                        let swirlPosY = swirlPosYstart;
+                        for (let step = 0; step < swirlSteps; step++) {
+                            const offsetXMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                            const offsetYMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                            swirlPosX = swirlPosX + offsetXMove;
+                            swirlPosY = swirlPosY + offsetYMove;
+                            updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                            swirlPointer.moved = true; // force the splat
+                            swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                        }
+                        console.log("Swirl pointer: ", swirlPointer);
+                    }
+                }
+            }
+        }
+
 
         // Change color according to head tilt if mode is activated
         if (headTiltColorMode && m.id === bodyPartsIndex['head']) {
@@ -2445,7 +2573,9 @@ window.addEventListener('keydown', e => {
         chestBackBefore = m.id === bodyPartsIndex['chest_back'] ? [m.x, m.y, m.z] : chestBackBefore;
         leftFootBefore = m.id === bodyPartsIndex['left_foot'] ? [m.x, m.y, m.z] : leftFootBefore;
         rightFootBefore = m.id === bodyPartsIndex['right_foot'] ? [m.x, m.y, m.z] : rightFootBefore;
-
+        headBefore = m.id === bodyPartsIndex['head'] ? [m.x, m.y, m.z] : headBefore;
+        leftHandVelBefore = m.id === bodyPartsIndex['left_hand'] ? [m.vx, m.vy, m.vz] : leftHandVelBefore;
+        rightHandVelBefore = m.id === bodyPartsIndex['right_hand'] ? [m.vx, m.vy, m.vz] : rightHandVelBefore;
 
         if (trackedBodyParts.includes(m.id)) {
             // Defining the parameters of the splat to be visualized and save it in the pointer move data
