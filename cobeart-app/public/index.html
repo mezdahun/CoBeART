@@ -6,6 +6,7 @@
     <title>CoBeArt — Live Tracking Debug</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!-- Socket.IO client served by the server automatically at /socket.io/socket.io.js -->
+    <link rel="stylesheet" href="/shared-border.css">
     <style>
         html,
         body {
@@ -37,40 +38,12 @@
         <div class="badge">fps(rx): <span id="fps">0</span></div>
     </div>
     <pre id="out">{ waiting for data… }</pre>
-
     <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const statusEl = document.getElementById("status");
-        const out = document.getElementById("out");
-        const fpsEl = document.getElementById("fps");
-
-        window.viewerSocket = io("/viewer", { transports: ["websocket"] });
-        const socket = window.viewerSocket;
-
-        let count = 0, lastTs = performance.now();
-        function tickFPS() {
-            const now = performance.now();
-            if (now - lastTs >= 1000) {
-                fpsEl.textContent = String(count);
-                count = 0; lastTs = now;
-            }
-            requestAnimationFrame(tickFPS);
-        }
-        tickFPS();
-
-        socket.on("connect", () => statusEl.textContent = "connected");
-        socket.on("disconnect", () => statusEl.textContent = "disconnected");
-
-        socket.on("frame", (payload) => {
-            count++;
-            // Pretty-print with limited size to avoid locking UI for huge payloads
-            out.textContent = JSON.stringify(payload, null, 2);
-        });
-    </script>
     <!-- The fluid simulation is structured as an embedded standalone browser (black box). -->
     <iframe id="fluidFrame" src="/fluid/index.html">
     </iframe>
     <script src="/fluid-bridge.js"></script>
+    <script src="/border-control.js"></script>
 
 </body>
 

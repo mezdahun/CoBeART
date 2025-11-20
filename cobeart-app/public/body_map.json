@@ -1,0 +1,10 @@
+{
+  "left_hand": 0,
+  "right_hand": 1,
+  "head": 2,
+  "chest_front": 3,
+  "chest_back": 4,
+  "left_foot": 5,
+  "right_foot": 6,
+  "stick": 7
+}

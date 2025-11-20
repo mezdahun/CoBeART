@@ -22,6 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+import backgroundRegistry from '../backgrounds/registry.js';
+
 'use strict';
 
 // Mobile promo section
@@ -78,14 +80,15 @@ let config = {
     BLOOM: true,
     BLOOM_ITERATIONS: 8,
     BLOOM_RESOLUTION: 256,
-    BLOOM_INTENSITY: 0.2,
+    BLOOM_INTENSITY: 0.0,
     BLOOM_THRESHOLD: 1,
     BLOOM_SOFT_KNEE: 0.7,
     SUNRAYS: true,
     SUNRAYS_RESOLUTION: 196,
     SUNRAYS_WEIGHT: 0.5,
     SHOW_BACKGROUND: false,
-    DYNAMIC_CONFIG: false
+    DYNAMIC_CONFIG: false,
+    BACKGROUND_INDEX: 0
 }
 
 // Definition of single pointer in canvas
@@ -225,6 +228,10 @@ function startGUI() {
     gui.add(config, 'COLORFUL').name('colorful');
     gui.add(config, 'PAUSED').name('paused').listen();
     gui.add(config, 'SHOW_BACKGROUND').name('show background');
+
+    const bgOptions = {};
+    backgroundRegistry.forEach((bg, i) => { bgOptions[bg.name] = i; });
+    gui.add(config, 'BACKGROUND_INDEX', bgOptions).name('background');
 
     gui.add({
         fun: () => {
@@ -634,174 +641,6 @@ const displayShaderSource = `
     }
 `;
 
-// COMMENTED OUT: Original starry background shader from https://www.shadertoy.com/view/tllfRX
-/*
-const originalBackgroundShaderSource = `
-    precision highp float;
-    varying vec2 vUv; // Passed by the vertex shader, represents coordinates from 0.0 to 1.0
-
-    // Uniforms to receive data from JavaScript, matching the Shadertoy format
-    uniform vec3      iResolution;           // viewport resolution (in pixels)
-    uniform float     iTime;                 // shader playback time (in seconds)
-
-    #define NUM_LAYERS 8.
-    #define TAU 6.28318
-    #define PI 3.141592
-    #define Velocity .025 //modified value to increse or decrease speed, negative value travel backwards
-    #define StarGlow 0.025
-    #define StarSize 02.
-    #define CanvasView 20.
-
-
-    float Star(vec2 uv, float flare){
-        float d = length(uv);
-        float m = sin(StarGlow*1.2)/d;  
-        float rays = max(0., .5-abs(uv.x*uv.y*1000.)); 
-        m += (rays*flare)*2.;
-        m *= smoothstep(1., .1, d);
-        return m;
-    }
-
-    float Hash21(vec2 p){
-        p = fract(p*vec2(123.34, 456.21));
-        p += dot(p, p+45.32);
-        return fract(p.x*p.y);
-    }
-
-
-    vec3 StarLayer(vec2 uv){
-        vec3 col = vec3(0);
-        vec2 gv = fract(uv);
-        vec2 id = floor(uv);
-        for(int y=-1;y<=1;y++){
-            for(int x=-1; x<=1; x++){
-                vec2 offs = vec2(x,y);
-                float n = Hash21(id+offs);
-                float size = fract(n);
-                float star = Star(gv-offs-vec2(n, fract(n*34.))+.5, smoothstep(.1,.9,size)*.46);
-                vec3 color = sin(vec3(.2,.3,.9)*fract(n*2345.2)*TAU)*.25+.75;
-                color = color*vec3(.9,.59,.9+size);
-                star *= sin(iTime*.6+n*TAU)*.5+.5;
-                col += star*size*color;
-            }
-        }
-        return col;
-    }
-
-    // This is the main function adapted from Shadertoy's 'mainImage'
-    void mainImage( out vec4 fragColor, in vec2 fragCoord )
-    {
-        vec2 uv = (fragCoord-.5*iResolution.xy)/iResolution.y;
-        vec2 M = vec2(0);
-        M -= vec2(M.x+sin(iTime*0.22), M.y-cos(iTime*0.22));
-        float t = iTime*Velocity; 
-        vec3 col = vec3(0);  
-        for(float i=0.; i<1.; i+=1./NUM_LAYERS){
-            float depth = fract(i+t);
-            float scale = mix(CanvasView, .5, depth);
-            float fade = depth*smoothstep(1.,.9,depth);
-            col += StarLayer(uv*scale+i*453.2-iTime*.05+M)*fade;}   
-        fragColor = vec4(col,1.0);
-    }
-
-    // The main entry point for the fragment shader
-    void main() {
-        // We call the adapted Shadertoy main function, providing the required outputs and inputs.
-        mainImage(gl_FragColor, gl_FragCoord.xy);
-    }
-`;
-*/
-
-// NEW: Shadertoy shader from https://www.shadertoy.com/view/XXyGzh
-const backgroundShaderSource = `
-    precision highp float;
-    varying vec2 vUv; // Passed by the vertex shader, represents coordinates from 0.0 to 1.0
-
-    // Uniforms to receive data from JavaScript, matching the Shadertoy format
-    uniform vec3      iResolution;           // viewport resolution (in pixels)
-    uniform float     iTime;                 // shader playback time (in seconds)
-    uniform float     iTimeDelta;            // render time (in seconds)
-    uniform float     iFrameRate;            // shader frame rate
-    uniform int       iFrame;                // shader playback frame
-    uniform float     iChannelTime[4];       // channel playback time (in seconds)
-    uniform vec3      iChannelResolution[4]; // channel resolution (in pixels)
-    uniform vec4      iMouse;                // mouse pixel coords. xy: current (if MLB down), zw: click
-    uniform vec4      iDate;                 // (year, month, day, time in seconds)
-    uniform float     iSampleRate;           // sound sample rate (i.e., 44100)
-
-    // Custom tanh implementation for WebGL compatibility
-    float tanh_custom(float x) {
-        float e2x = exp(2.0 * x);
-        return (e2x - 1.0) / (e2x + 1.0);
-    }
-    
-    vec2 tanh_custom(vec2 v) {
-        return vec2(tanh_custom(v.x), tanh_custom(v.y));
-    }
-    
-    // Helper function from COMMON section
-    vec2 stanh(vec2 a) {
-        return tanh_custom(clamp(a, -40., 40.));
-    }
-
-    // This is the main function adapted from Shadertoy's 'mainImage'
-    void mainImage( out vec4 o, vec2 u )
-    {
-        vec2 v = iResolution.xy;
-        // Proper Shadertoy coordinate transformation
-        u = 0.2 * (u + u - v) / v.y;
-             
-        vec4 z = o = vec4(1,2,3,0); // Restore original colorful base
-         
-        float a = 0.5;
-        float t = iTime;
-        vec4 matVec;
-        
-        for (float i = 0.0; i < 19.0; i += 1.0) {
-             o += (1. + cos(z+t)) 
-                / length((1.+i*dot(v,v)) 
-                       * sin(1.5*u/(0.5-dot(u,u)) - 9.*u.yx + t));
-             
-            t += 1.0;
-            v = cos(t - 7.*u*pow(a, i)) - 5.*u;
-            a += 0.03;
-            
-            // Use stanh here as recommended for black artifacts
-            matVec = cos(i + .02*t - vec4(0,11,33,0));
-            u *= mat2(matVec.x, matVec.y, matVec.z, matVec.w);
-            u += stanh(40. * dot(u, u) * cos(1e2*u.yx + t) * vec2(1.0)) / 2e2
-               + .2 * a * u
-               + cos(4./exp(dot(o,o)/1e2) + t) / 3e2;
-        }
-                  
-         o = 25.6 / (min(o, vec4(13.)) + 164. / o) 
-           - dot(u, u) / 250.;
-           
-         // Target only the slow oscillating background, preserve fast electric streaks
-         float maxComponent = max(max(o.r, o.g), o.b);
-         float colorVariation = maxComponent - min(min(o.r, o.g), o.b);
-         
-         // Electric effects have high intensity and high color variation
-         float electricMask = smoothstep(0.4, 1.0, maxComponent) * smoothstep(0.1, 0.5, colorVariation);
-         
-         // Make clouds much darker
-         float gray = dot(o.rgb, vec3(0.299, 0.587, 0.114));
-         vec3 darkClouds = vec3(gray * 0.1); // Much darker clouds (was 0.3, now 0.1)
-         
-         // Boost electric effects brightness
-         vec3 brightElectric = o.rgb * 1.4; // Boost brightness by 40%
-         
-         // Mix: very dark clouds with bright electric effects
-         o.rgb = mix(darkClouds, brightElectric, electricMask);
-    }
-
-    // The main entry point for the fragment shader
-    void main() {
-        // We call the adapted Shadertoy main function, providing the required outputs and inputs.
-        mainImage(gl_FragColor, gl_FragCoord.xy);
-    }
-`;
-
 const bloomPrefilterShader = compileShader(gl.FRAGMENT_SHADER, `
     precision mediump float;
     precision mediump sampler2D;
@@ -1166,7 +1005,10 @@ const vorticityProgram = new Program(baseVertexShader, vorticityShader);
 const pressureProgram = new Program(baseVertexShader, pressureShader);
 const gradienSubtractProgram = new Program(baseVertexShader, gradientSubtractShader);
 
-const backgroundProgram = new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, backgroundShaderSource));
+// Compile all background shaders from the registry
+const backgroundPrograms = backgroundRegistry.map(bg =>
+  new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, bg.fragmentShader))
+);
 
 const displayMaterial = new Material(baseVertexShader, displayShaderSource);
 
@@ -1371,14 +1213,14 @@ function computeVelocityDissipation(zdict) {
     // TODO: modify other global variables to have IDs for multiple tracked opbjects
     const posz = zdict[1]
     // zpos between 0 and 1000
-    console.log("z coord: ", posz);
+    //console.log("z coord: ", posz);
     var z = typeof posz === 'number' ? posz : 0;
     z = Math.max(0, Math.min(z, 2000)) / 2000;
     // higher the z lower the dissipation (between 1 and 4)
     const mindiss = 1.0;
     const maxdiss = 4.0;
     const diss = maxdiss - z * (maxdiss - mindiss);
-    console.log("dissipation: ", z, diss);
+    //console.log("dissipation: ", z, diss);
     return diss;
 }
 
@@ -1410,13 +1252,13 @@ function update() {
         initFramebuffers();
     updateColors(dt);
     // Update splat radius and curl based on latest incoming velocities before applying inputs
-    if (config.DYNAMIC_CONFIG) {
-        config.SPLAT_RADIUS = computeSplatRadius(latestNormVel);
-        console.log("splat radius: ", config.SPLAT_RADIUS);
-        config.VELOCITY_DISSIPATION = computeVelocityDissipation(latestZ);
-        console.log("velocity dissipation: ", config.VELOCITY_DISSIPATION);
-        config.CURL = computeCurl(latestAngVel.vroll, latestAngVel.vpitch, latestAngVel.vyaw);
-    }
+//    if (config.DYNAMIC_CONFIG) {
+//        config.SPLAT_RADIUS = computeSplatRadius(latestNormVel);
+//        console.log("splat radius: ", config.SPLAT_RADIUS);
+//        config.VELOCITY_DISSIPATION = computeVelocityDissipation(latestZ);
+//        console.log("velocity dissipation: ", config.VELOCITY_DISSIPATION);
+//        config.CURL = computeCurl(latestAngVel.vroll, latestAngVel.vpitch, latestAngVel.vyaw);
+//    }
     applyInputs();
     if (!config.PAUSED)
         step(dt);
@@ -1566,9 +1408,31 @@ function render(target, elapsedTime) {
 }
 
 function drawBackground(target, elapsedTime) {
-    backgroundProgram.bind();
-    gl.uniform3f(backgroundProgram.uniforms.iResolution, canvas.width, canvas.height, 1.0);
-    gl.uniform1f(backgroundProgram.uniforms.iTime, elapsedTime * 0.25); // Slow down time by 75%
+    const currentProgram = backgroundPrograms[config.BACKGROUND_INDEX];
+    const bgDef = backgroundRegistry[config.BACKGROUND_INDEX];
+
+    currentProgram.bind();
+
+    // Set uniforms based on which background is active
+    if (bgDef.name === 'Electric Clouds') {
+        gl.uniform3f(currentProgram.uniforms.iResolution, canvas.width, canvas.height, 1.0);
+        gl.uniform1f(currentProgram.uniforms.iTime, elapsedTime * 0.25); // Slow down time by 75%
+    } else if (bgDef.name === 'Circles') {
+        gl.uniform1f(currentProgram.uniforms.time, elapsedTime);
+        gl.uniform2f(currentProgram.uniforms.resolution, canvas.width, canvas.height);
+        gl.uniform1f(currentProgram.uniforms.circle_size, 1.59);
+        gl.uniform3f(currentProgram.uniforms.fill_color, 0.948, 0.133, 0.185);
+        gl.uniform3f(currentProgram.uniforms.grad_color, 0.995, 0.834, 0.0);
+    } else if (bgDef.name === 'Zephyr') {
+        gl.uniform1f(currentProgram.uniforms.time, elapsedTime);
+        gl.uniform2f(currentProgram.uniforms.resolution, canvas.width, canvas.height);
+        gl.uniform1f(currentProgram.uniforms.scaling, 0.7);
+        gl.uniform1f(currentProgram.uniforms.calm, 1.0);
+        gl.uniform1f(currentProgram.uniforms.contrast, 1.1);
+        gl.uniform3f(currentProgram.uniforms.color1, 0.9, 0.7, 0.2); // Warm gold
+        gl.uniform3f(currentProgram.uniforms.color2, 0.3, 0.7, 1.0); // Cool cyan
+    }
+
     blit(target);
 }
 
@@ -1677,7 +1541,9 @@ function blur(target, temp, iterations) {
 function splatPointer(pointer) {
     let dx = pointer.deltaX * config.SPLAT_FORCE;
     let dy = pointer.deltaY * config.SPLAT_FORCE;
-    splat(pointer.texcoordX, pointer.texcoordY, dx, dy, pointer.color);
+    // getting pointer.splatRadius if this exists, otherwise null
+    let splatRadius = pointer.splatRadius !== undefined ? pointer.splatRadius : null;
+    splat(pointer.texcoordX, pointer.texcoordY, dx, dy, pointer.color, splatRadius=splatRadius);
 }
 
 function multipleSplats(amount) {
@@ -1694,16 +1560,19 @@ function multipleSplats(amount) {
     }
 }
 
-function splat(x, y, dx, dy, color) {
+function splat(x, y, dx, dy, color, splatRadius=null) {
     splatProgram.bind();
     gl.uniform1i(splatProgram.uniforms.uTarget, velocity.read.attach(0));
     gl.uniform1f(splatProgram.uniforms.aspectRatio, canvas.width / canvas.height);
     gl.uniform2f(splatProgram.uniforms.point, x, y);
     gl.uniform3f(splatProgram.uniforms.color, dx, dy, 0.0);
-    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS / 100.0));
+
+    // check if splatRadius is null, then use default, otherwise use passed value
+    splatRadius = splatRadius === null ? config.SPLAT_RADIUS : splatRadius;
+
+    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(splatRadius / 100.0));
     blit(velocity.write);
     velocity.swap();
-
     gl.uniform1i(splatProgram.uniforms.uTarget, dye.read.attach(0));
     gl.uniform3f(splatProgram.uniforms.color, color.r, color.g, color.b);
     blit(dye.write);
@@ -1771,11 +1640,38 @@ window.addEventListener('touchend', e => {
     }
 });
 
+// Accept cursor events from composite parent
+window.addEventListener('message', (e) => {
+    const m = e.data;
+    if (!m || m.type !== 'cursor') return;
+    const px = m.x * canvas.width;
+    const py = (1.0 - m.y) * canvas.height;
+    const pointer = pointers[0] || new pointerPrototype();
+    if (m.down) {
+        updatePointerDownData(pointer, -1, px, py);
+        if (!pointers.includes(pointer)) pointers[0] = pointer;
+    } else if (m.up) {
+        updatePointerUpData(pointer);
+    } else {
+        updatePointerMoveData(pointer, px, py);
+    }
+});
+
 window.addEventListener('keydown', e => {
     if (e.code === 'KeyP')
         config.PAUSED = !config.PAUSED;
     if (e.key === ' ')
         splatStack.push(parseInt(Math.random() * 20) + 5);
+    if (e.key === 'g' || e.key === 'G') {
+        if (e.shiftKey) {
+            // Shift+G: cycle backwards
+            config.BACKGROUND_INDEX = (config.BACKGROUND_INDEX - 1 + backgroundRegistry.length) % backgroundRegistry.length;
+        } else {
+            // G: cycle forwards
+            config.BACKGROUND_INDEX = (config.BACKGROUND_INDEX + 1) % backgroundRegistry.length;
+        }
+        console.log('Switched to background:', backgroundRegistry[config.BACKGROUND_INDEX].name);
+    }
 });
 
 // Make external messages (postMessage) act like mouse drags.
@@ -1783,6 +1679,42 @@ window.addEventListener('keydown', e => {
 (function () {
     // Map rigid body IDs → pointer indices, so multiple bodies can paint at once (optional)
     const idToIndex = new Map();
+
+    // Use the first body (if any) to drive the parent “cursor”
+    // so molten reacts immediately; fluid receives splats for ALL bodies.
+    let bodyPartsIndex = {};
+    let trackedBodyParts = [];
+    let objectIDs = [];
+    let trackedObjects = {};
+    fetch('/body_map.json')
+      .then(response => response.json())
+      .then(data => {
+        if (data) {
+          bodyPartsIndex = data;
+          console.log("Loaded body_map.json: ", data);
+          // defining which body parts to follow with steady splats
+          trackedBodyParts = [
+              bodyPartsIndex['right_hand'],
+              bodyPartsIndex['left_hand'],
+              bodyPartsIndex['left_foot'],
+              bodyPartsIndex['right_foot']
+              ];
+          console.log("Tracking body parts IDs: ", trackedBodyParts);
+          //PATTERN 10 params
+          console.log("OBJECT bodyPartsIndex[stick]: ", bodyPartsIndex['stick']);
+          objectIDs.push(bodyPartsIndex['stick']);
+          objectIDs.push(bodyPartsIndex['ball']);
+          objectIDs.push(bodyPartsIndex['object']);
+          console.log("OBJECT Tracking object IDs: ", objectIDs);
+          for (const objID of objectIDs) {
+              trackedObjects[objID] = false;
+          }
+          console.log("OBJECT Initialized trackedObjects: ", trackedObjects);
+        }
+      })
+      .catch(error => {
+        console.error('Failed to load body_map.json:', error);
+      });
 
     function ensurePointer(index) {
         while (pointers.length <= index) pointers.push(new pointerPrototype());
@@ -1798,10 +1730,79 @@ window.addEventListener('keydown', e => {
         return ensurePointer(idToIndex.get(id));
     }
 
+    let leftFootZBefore = 0;
+    let rightFootZBefore = 0;
+    let leftFootBefore = [];
+    let rightFootBefore = [];
+    let chestFrontBefore = [];
+    let chestBackBefore = [];
+    let leftHandBefore = [];
+    let rightHandBefore = [];
+    let leftHandVelBefore = [];
+    let rightHandVelBefore = [];
+    let headBefore = [];
+
+    // Defining an RGB color palette of yellow-orange-red-purple of 300 colors
+    let colorPalette = [];
+    let defaultColorPalette = [];
+    let minHue = 60; // yellow
+    let maxHue = -60; // purple
+    for (let i = 0; i <= 99; i++) {
+        const hue = minHue - (i / 99) * (minHue - maxHue);
+        const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
+        colorPalette.push(rgb);
+        defaultColorPalette.push(rgb);
+    }
+
+
+    //PATTERN 7 params
+    let fallExplosionPalette = []; // from white to blue color
+    for (let i = 0; i <= 99; i++) {
+        const hue = 240; // blue hue
+        const saturation = i / 99; // from 0 to 1
+        const value = 3.0; // full brightness
+        const rgb = HSVtoRGB(hue / 360, saturation, value);
+        fallExplosionPalette.push(rgb);
+    }
+
+    let fallExplosionStarted = false;
+    let fallExplosionFinished = false;
+    let fallExplosionStartTime = null;
+    let fallExplosionDT = 1; // milliseconds
+    let fallExplosionSplashCoordinates = [];
+    let fallExplosionTargets = [];
+    let fallExplosionStep = 15
+    let fallExplosionColorIndex = 0;
+
+    //PATTERN 8 params
+    let jumpGhostStarted = false;
+    let jumpGhostFinished = false;
+    let jumpGhostStartTime = null;
+    let jumpGhostDT = 1; // milliseconds
+    let jumpGhostSplashCoordinates = [];
+    let jumpGhostTargets = [];
+    let jumpGhostStep = 15
+
+    //PATTERN 9 params
+    let headTiltColorMode = false;
+    let stabilityNumTimesteps = 10; // condiution has to meet for number of timesteps that triggers the effect
+    let triggerCounter = 0; // counting how many times the condition is met
+    let triggerOffCounter = 0; // counting how many times the OFF condition is met
+    // timepoint of last trigger
+    let timeWhenLastTrigger = Date.now();
+
+    //PATTERN 12 params
+    let handsOn = true; // whether hands or feet are followed with steady splats
+    let handsOnTriggerCounter = 0; // counting how many times the hands-on condition is met
+    let timeWhenLastTriggerHandsOn = Date.now();
+
+    //PATTERN 11 params
+    let microsplatActive = false; // can be turned on by putting hands together above head
+
     window.addEventListener('message', (e) => {
         const m = e.data;
         //    printing receuived data
-        console.log('Received message:', m);
+        //console.log('Received message:', m);
         if (!m || m.type !== 'splat') return;
 
         // Track latest angular velocities from the incoming message
@@ -1828,7 +1829,7 @@ window.addEventListener('keydown', e => {
         console.log(`Pointer position: (${posX}, ${posY})`);
 
         // Pick a pointer (by body ID if provided)
-        const pointer = pointerForId(m.id ?? null);
+        const pointer = pointerForId(m.id);
 
         // Press if not already down, mirroring the mousedown logic in the file
         if (!pointer.down) {
@@ -1840,14 +1841,807 @@ window.addEventListener('keydown', e => {
             }
         }
 
-        // Move exactly like the mousemove handler does
-        updatePointerMoveData(pointer, posX, posY);
+        // PATTERN 1: Hand drop, Changing splat radius with hand depth
+        // Calculating splat radius between 0.01 and 0.8 according to the height of the splat (z coord)
+        let splatRadius = null;
 
-        // Auto-release after a short silence so pointers don't stay "stuck down"
-        clearTimeout(pointer._autoUpTimer);
-        pointer._autoUpTimer = setTimeout(() => {
-            updatePointerUpData(pointer);
-        }, 60); // ms; tweak to taste for smoother/continuous drags
+        // Pattern parameters
+        const dynRadiusBelowZ = 1800; // z below which splat radius increases
+        const maxSplatRadius = 0.5; // maximum splat radius
+        const minSplatRadius = 0.08; // minimum splat radius
+
+
+        // If the tracked object is a hand we dynamically adjust splat radius
+        if (m.id === bodyPartsIndex['right_hand'] || m.id === bodyPartsIndex['left_hand']) {
+            const posZ = m.z;
+            if (typeof posZ === 'number') {
+                // below dynRadiusBelowZ z we increase splat radius according to depth
+                if (posZ < dynRadiusBelowZ) {
+                    const z = Math.max(0, Math.min(posZ, dynRadiusBelowZ)) / dynRadiusBelowZ;
+                    splatRadius = maxSplatRadius - z * (maxSplatRadius - minSplatRadius);
+                } else {
+                    splatRadius = minSplatRadius;
+                }
+            }
+        }
+
+        // PATTERN 2: Bloom kick: set bloom according to the highest foot's z coord
+        const posZ = m.z;
+        const maxBloomZ = 1500; // z at which bloom is maximum
+        const maxBloomValue = 0.15; // maximum bloom intensity
+        const lowerZThreshold = 200; // z below which no bloom is applied and from which smooth change of bloom is applied
+        if ((m.id === bodyPartsIndex['right_foot'] && posZ > leftFootZBefore) ||
+            (m.id === bodyPartsIndex['left_foot'] && posZ > rightFootZBefore)
+        ) {
+            if (typeof posZ === 'number') {
+                if (posZ > lowerZThreshold) {
+                    const z = posZ <= lowerZThreshold ? 0 : Math.min((posZ - lowerZThreshold) / (maxBloomZ - lowerZThreshold), 1) * maxBloomValue;
+                    config.BLOOM_INTENSITY = z * maxBloomValue;
+                } else {
+                    config.BLOOM_INTENSITY = 0.0;
+                }
+            }
+            //console.log("Setting BLOOM_INTENSITY to ", config.BLOOM_INTENSITY);
+        }
+
+        // PATTERN 10: Using objects, e.g. if m.id in stick, rope or object
+        // First we check if any of the objects are closer to the right hand than 200, if so, we turn on tracking for them
+        let turnOnDistance = 300;
+        for (const objID of objectIDs) {
+            if (m.id === objID) {
+                console.log("OBJECT Checking distances for object ID ", objID);
+                const objPos = [m.x, m.y, m.z];
+                const rightHandPos = rightHandBefore.length === 3 ? rightHandBefore : null;
+                const leftHandPos = leftHandBefore.length === 3 ? leftHandBefore : null;
+                if (rightHandPos) {
+                    const distance = Math.sqrt(
+                        (objPos[0] - rightHandPos[0]) ** 2 +
+                        (objPos[1] - rightHandPos[1]) ** 2 +
+                        (objPos[2] - rightHandPos[2]) ** 2
+                    );
+                    console.log("OBJECT Distance between object ID ", objID, " and right hand: ", distance);
+                    if (distance < turnOnDistance) {
+                        console.log("OBJECT Turning ON tracking for object ID ", objID);
+                        trackedObjects[objID] = true;
+                    };
+                }
+                if (leftHandPos) {
+                    const distance = Math.sqrt(
+                        (objPos[0] - leftHandPos[0]) ** 2 +
+                        (objPos[1] - leftHandPos[1]) ** 2 +
+                        (objPos[2] - leftHandPos[2]) ** 2
+                    );
+                    if (distance < turnOnDistance) {
+                        console.log("OBJECT Turning OFF tracking for object ID ", objID);
+                        trackedObjects[objID] = false;
+                    };
+                }
+            }
+        }
+
+        // If the current tracked object is set to true, we set a bright color for it and make a splat
+        if (objectIDs.includes(m.id)) {
+            if (trackedObjects[m.id]) {
+            console.log("OBJECT ", m.id);
+                pointer.color = { r: 3.0, g: 3.0, b: 0.0 }; // bright yellow
+                //appendning id to trackedBodyParts if not already there
+                if (!trackedBodyParts.includes(m.id)) {
+                    trackedBodyParts.push(m.id);
+                }
+            } else {
+                // remove id from trackedBodyParts if exists
+                const index = trackedBodyParts.indexOf(m.id);
+                if (index > -1) {
+                    trackedBodyParts.splice(index, 1);
+                }
+            }
+        }
+
+        //PATTERN 3: Color Speed: change color according to linear velocity of the tracked object
+        if (typeof m.normVel === 'number') {
+            const speed = m.normVel;
+            // Map speed to an index in the color palette. normVel is between 0 and 1 we need the output to be between 0 and 99
+            let colorIndex = Math.floor(Math.max(0, Math.min(speed, 1.0)) * 99);
+            console.log("Setting color index to ", colorIndex, " for speed ", speed);
+            const newColor = colorPalette[colorIndex];
+            console.log("Setting pointer color to ", newColor);
+            pointer.color = newColor;
+        }
+
+        //PATTERN 4: Density Control: change density diffusion according to hand-hand closeness
+        const minDensityDissipation = 0.01;
+        const maxDensityDissipation = 4.5;
+        if ((m.id === bodyPartsIndex['left_hand'] && rightHandBefore.length === 3) ||
+            (m.id === bodyPartsIndex['right_hand'] && leftHandBefore.length === 3)) {
+            var handLeftPos = leftHandBefore;
+            var handRightPos = rightHandBefore;
+            if (m.id === bodyPartsIndex['left_hand']) {
+                handLeftPos = [m.x, m.y, m.z];
+            } else if (m.id === bodyPartsIndex['right_hand']) {
+                handRightPos = [m.x, m.y, m.z];
+            }
+
+            // check the distance between hands
+            const distance = Math.sqrt(
+                (handLeftPos[0] - handRightPos[0]) ** 2 +
+                (handLeftPos[1] - handRightPos[1]) ** 2 +
+                (handLeftPos[2] - handRightPos[2]) ** 2
+            );
+
+            if (distance > 1500) {
+                // Map distance to density dissipation between 0 (close) and 3.5 (far)
+                const maxDistance = 2000; // distance at which dissipation is maximum
+                const z = Math.max(0, Math.min(distance, maxDistance)) / maxDistance;
+                var newDissipation = maxDensityDissipation - z * (maxDensityDissipation - minDensityDissipation);
+                if (newDissipation < minDensityDissipation) {
+                    newDissipation = 0.01;
+                }
+                config.DENSITY_DISSIPATION = newDissipation;
+            } else {
+                config.DENSITY_DISSIPATION = maxDensityDissipation;
+            }
+            console.log("Setting DENSITY_DISSIPATION to ", config.DENSITY_DISSIPATION);
+        }
+
+        //PATTERN 5: Unique Feet: Feet are tracked with black (at 0) to gray (at 2000) splat colors according to height
+        if (handsOn) {
+            if (m.id === bodyPartsIndex['left_foot'] || m.id === bodyPartsIndex['right_foot']) {
+                const posZ = m.z;
+                if (typeof posZ === 'number') {
+                    const z = Math.max(0, Math.min(posZ, 2000)) / 8000;
+                    const grayValue = z; // between 0 (black) and 1 (white)
+                    //black splat means we still can swirl the already existing splats with feet but
+                    // foot movement will not make new splats
+                    var footColor = { r: 0, g: 0, b: 0 };
+                    if (posZ > 500) {
+                        footColor = { r: grayValue, g: grayValue, b: grayValue}
+                    }
+                    pointer.color = footColor;
+                    //console.log("Setting foot color to ", footColor, " for z ", posZ);
+                }
+            }
+        }
+
+        //PATTERN 6: Fall Explosion: When fall is detected, we generate a series of splats with dedicated ID,
+        //such that the splash goes from one of the corners of the arena to the position of the center of mass of the body
+        const fallZThreshold = 500; // z above which a fall is detected when all hands and feet are below this z
+        if (leftFootZBefore < fallZThreshold &&
+            rightFootZBefore < fallZThreshold &&
+            leftHandBefore[2] < fallZThreshold &&
+            rightHandBefore[2] < fallZThreshold) {
+            if (!fallExplosionStarted) {
+                fallExplosionStarted = true;
+                fallExplosionFinished = false;
+                fallExplosionStartTime = Date.now();
+                fallExplosionColorIndex = 0;
+                const explosionRoots = [
+                    { x: -arena_x, y: -arena_y }, // bottom-left
+                    { x: 0,        y: -arena_y }, // bottom-center
+                    { x:  arena_x, y: -arena_y }, // bottom-right
+                    { x:  arena_x, y: 0        }, // right-center
+                    { x:  arena_x, y:  arena_y }, // top-right
+                    { x: 0,        y:  arena_y }, // top-center
+                    { x: -arena_x, y:  arena_y }, // top-left
+                    { x: -arena_x, y: 0        }, // left-center
+                ];
+
+                // Define splash coordinates based on arena scaling
+                fallExplosionSplashCoordinates = explosionRoots.map(corner => {
+                    const norm_x = (-corner.x + arena_x) / (2 * arena_x);
+                    const norm_y = ( corner.y + arena_y) / (2 * arena_y);
+                    return [
+                        norm_x * canvas.clientWidth,
+                        norm_y * canvas.clientHeight
+                    ];
+                });
+
+                // Target is the center of mass of the hands, scaled with the *same* mapping
+                const centerX = (leftHandBefore[0] + rightHandBefore[0]) / 2;
+                const centerY = (leftHandBefore[1] + rightHandBefore[1]) / 2;
+
+                const norm_centerX = (-centerX + arena_x) / (2 * arena_x);
+                const norm_centerY = ( centerY + arena_y) / (2 * arena_y);
+
+                fallExplosionTargets = [
+                    norm_centerX * canvas.clientWidth,
+                    norm_centerY * canvas.clientHeight
+                ];
+
+                console.log("Fall detected! Starting fall explosion towards ", fallExplosionTargets);
+            }
+        }
+
+        if (fallExplosionStarted && (Date.now() - fallExplosionStartTime) > fallExplosionDT) {
+            console.log("Generating fall explosion splats at coordinates: ", fallExplosionSplashCoordinates);
+
+            fallExplosionSplashCoordinates.forEach((coord, index) => {
+                const posX = scaleByPixelRatio(coord[0]);
+                const posY = scaleByPixelRatio(coord[1]);
+
+                const dx = fallExplosionTargets[0] - coord[0];
+                const dy = fallExplosionTargets[1] - coord[1];
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const normDist = Math.max(0, Math.min(dist / (2 * arena_x), 1.0));
+
+                const cornerId = 9999 + index;
+                const pointer = pointerForId(cornerId);
+
+                updatePointerDownData(pointer, -1, posX, posY);
+                pointer.color = fallExplosionPalette[fallExplosionColorIndex];
+                fallExplosionColorIndex = Math.min(fallExplosionColorIndex + 1, fallExplosionPalette.length - 1);
+                console.log("Fall corner pointer DOWN: ", pointer.color);
+                updatePointerMoveData(pointer, posX, posY);
+
+                // force the splat in case delta ends up 0
+                pointer.moved = true;
+                // map radius between 0.5 and 2 according to distance from target
+                pointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
+
+                console.log("Fall corner pointer: ", pointer);
+            });
+
+            fallExplosionStartTime = Date.now();
+
+            // move each splash by a fixed distance towards the target
+            fallExplosionSplashCoordinates = fallExplosionSplashCoordinates.map(coord => {
+                const dx = fallExplosionTargets[0] - coord[0];
+                const dy = fallExplosionTargets[1] - coord[1];
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                // already close enough, snap to target
+                if (dist <= fallExplosionStep || dist === 0) {
+                    return [fallExplosionTargets[0], fallExplosionTargets[1]];
+                }
+
+                const ux = dx / dist;
+                const uy = dy / dist;
+
+                const newX = coord[0] + ux * fallExplosionStep;
+                const newY = coord[1] + uy * fallExplosionStep;
+
+                return [newX, newY];
+            });
+
+            // stop once the first splash reached the center (all arrive almost together)
+            const distToTarget = Math.sqrt(
+                (fallExplosionSplashCoordinates[0][0] - fallExplosionTargets[0]) ** 2 +
+                (fallExplosionSplashCoordinates[0][1] - fallExplosionTargets[1]) ** 2
+            );
+            if (distToTarget <= fallExplosionStep) {
+                fallExplosionFinished = true;
+            }
+        }
+
+        // recover from fall explosion state once both hands above threshold
+        if (fallExplosionFinished &&
+            leftHandBefore[2] > fallZThreshold &&
+            rightHandBefore[2] > fallZThreshold) {
+            fallExplosionStarted = false;
+        }
+
+//        // PATTERN 7: Jump Ghosts: When jump is detected we generate a ghost splash (black color) striking through
+//        // the center of mass of the hands in the direction of the jump
+//        const jumpZThreshold = 400; // z above which a jump is detected
+//        if (leftFootZBefore > jumpZThreshold &&
+//            rightFootZBefore > jumpZThreshold) {
+//
+//            if (!jumpGhostStarted && leftHandBefore.length === 3 && rightHandBefore.length === 3) {
+//                console.log("Jump detected initiation conditions met.");
+//                jumpGhostStarted = true;
+//                jumpGhostFinished = false;
+//                jumpGhostStartTime = Date.now();
+//
+//                // Center of mass of the hands (arena space)
+//                const centerX = (leftHandBefore[0] + rightHandBefore[0]) / 2;
+//                const centerY = (leftHandBefore[1] + rightHandBefore[1]) / 2;
+//
+//                // Direction of the jump from current foot position vs previous one
+//                let dirX = 0;
+//                let dirY = 1; // fallback
+//
+//                if (m.id === bodyPartsIndex['right_foot'] && rightFootBefore.length === 3) {
+//                    // posX, posY are the *current* arena coords of the right foot
+//                    dirX = m.x - rightFootBefore[0];
+//                    dirY = m.y - rightFootBefore[1];
+//                } else if (m.id === bodyPartsIndex['left_foot'] && leftFootBefore.length === 3) {
+//                    // same for left foot
+//                    dirX = m.x - leftFootBefore[0];
+//                    dirY = m.y - leftFootBefore[1];
+//                }
+//
+//                // Normalize
+//                let len = Math.sqrt(dirX * dirX + dirY * dirY);
+//                if (len < 1e-3) {
+//                    // If the movement vector is tiny, keep a simple default (straight up)
+//                    dirX = 0;
+//                    dirY = 1;
+//                    len = 1;
+//                }
+//                dirX /= len;
+//                dirY /= len;
+//
+//                // Find how far we can go inside the arena square [-arena_x, arena_x] x [-arena_y, arena_y]
+//                const tx = dirX !== 0 ? arena_x / Math.abs(dirX) : Infinity;
+//                const ty = dirY !== 0 ? arena_y / Math.abs(dirY) : Infinity;
+//                const tMax = Math.min(tx, ty);
+//
+//                // Farthest point "behind" the COM and the point "ahead" in jump direction
+//                const startArenaX = -dirX * tMax;
+//                const startArenaY = -dirY * tMax;
+//                const endArenaX   =  dirX * tMax;
+//                const endArenaY   =  dirY * tMax;
+//
+//                // Map arena → canvas coords using the same transform as everywhere else
+//                const norm_startX = (-startArenaX + arena_x) / (2 * arena_x);
+//                const norm_startY = ( startArenaY + arena_y) / (2 * arena_y);
+//                const norm_endX   = (-endArenaX   + arena_x) / (2 * arena_x);
+//                const norm_endY   = ( endArenaY   + arena_y) / (2 * arena_y);
+//
+//                jumpGhostSplashCoordinates = [[
+//                    norm_startX * canvas.clientWidth,
+//                    norm_startY * canvas.clientHeight
+//                ]];
+//
+//                jumpGhostTargets = [
+//                    norm_endX * canvas.clientWidth,
+//                    norm_endY * canvas.clientHeight
+//                ];
+//
+//                console.log("Jump detected! Starting jump ghost from ",
+//                    jumpGhostSplashCoordinates[0], " to ", jumpGhostTargets);
+//            }
+//        }
+//
+//        // Move and render the jump ghost
+//        if (jumpGhostStarted && !jumpGhostFinished &&
+//            (Date.now() - jumpGhostStartTime) > jumpGhostDT) {
+//
+//            console.log("Jump ghost at: ", jumpGhostSplashCoordinates);
+//
+//            jumpGhostSplashCoordinates.forEach((coord, index) => {
+//                const posXg = scaleByPixelRatio(coord[0]);
+//                const posYg = scaleByPixelRatio(coord[1]);
+//
+//                const dx = jumpGhostTargets[0] - coord[0];
+//                const dy = jumpGhostTargets[1] - coord[1];
+//                const dist = Math.sqrt(dx * dx + dy * dy);
+//                const normDist = Math.max(0, Math.min(dist / (2 * arena_x), 1.0));
+//
+//                const ghostId = 11000 + index; // dedicated ID for the ghost
+//                const ghostPointer = pointerForId(ghostId);
+//
+//                updatePointerDownData(ghostPointer, -1, posXg, posYg);
+//                // black "ghost" color
+//                ghostPointer.color = { r: 0.1, g: 0.1, b: 0.1 };
+//                updatePointerMoveData(ghostPointer, posXg, posYg);
+//
+//                // force the splat in case delta ends up 0
+//                ghostPointer.moved = true;
+//                // radius grows slightly as it approaches the center / target
+//                ghostPointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
+//
+//                console.log("Jump ghost pointer: ", ghostPointer);
+//            });
+//
+//            jumpGhostStartTime = Date.now();
+//
+//            // Move the ghost forward by a fixed distance towards the target
+//            jumpGhostSplashCoordinates = jumpGhostSplashCoordinates.map(coord => {
+//                const dx = jumpGhostTargets[0] - coord[0];
+//                const dy = jumpGhostTargets[1] - coord[1];
+//                const dist = Math.sqrt(dx * dx + dy * dy);
+//
+//                if (dist <= jumpGhostStep || dist === 0) {
+//                    jumpGhostFinished = true;
+//                    return [jumpGhostTargets[0], jumpGhostTargets[1]];
+//                }
+//
+//                const ux = dx / dist;
+//                const uy = dy / dist;
+//
+//                const newX = coord[0] + ux * jumpGhostStep;
+//                const newY = coord[1] + uy * jumpGhostStep;
+//
+//                return [newX, newY];
+//            });
+//        }
+//
+//        // Allow a new jump ghost once the current one is done and feet are back down
+//        if (jumpGhostFinished &&
+//            leftFootZBefore < jumpZThreshold &&
+//            rightFootZBefore < jumpZThreshold) {
+//            jumpGhostStarted = false;
+//        }
+
+//        //PATTERN 8: Pause Boom, Pause diffusion: of left-right hand distance smaller than 200
+//        const pauseThreshold = 200; // distance below which we pause the fluid
+//        if (leftHandBefore.length === 3 && rightHandBefore.length === 3) {
+//            const distance = Math.sqrt(
+//                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
+//                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
+//                (leftHandBefore[2] - rightHandBefore[2]) ** 2
+//            );
+//            if (distance < pauseThreshold) {
+//                config.PAUSED = true;
+//                //console.log("Pausing fluid due to hands closeness: ", distance);
+//            } else {
+//                config.PAUSED = false;
+//            }
+//        }
+
+        //PATTERN 9: Head Tilt Color Palette Shift: changing the color palette slice according to the roll of the head
+        // Head tilt color mode activation by moving right hand close to head and keeping still for 50 timesteps while
+        // right-left hand distance are above threshold
+        const headProximityThreshold = 400; // distance below which head tilt color mode is activated
+        const handDistanceThreshold = 1500; // distance above which head tilt color mode can be activated
+        const handDistanceThresholdHandsOn = 400; // distance below which hands detected to be kept together
+        const velTh = 150; // maximum velocity to consider hand as still
+        if (leftHandBefore.length === 3 && rightHandBefore.length === 3 &&
+           (Date.now() - timeWhenLastTrigger) > 5000) {
+            const headX = m.id === bodyPartsIndex['head'] ? m.x : 0;
+            const headY = m.id === bodyPartsIndex['head'] ? m.y : 0;
+            const headZ = m.id === bodyPartsIndex['head'] ? m.z : 0;
+
+            const distanceToHeadLeft = Math.sqrt(
+                (leftHandBefore[0] - headX) ** 2 +
+                (leftHandBefore[1] - headY) ** 2 +
+                (leftHandBefore[2] - headZ) ** 2
+            );
+
+            const distanceToHeadRight = Math.sqrt(
+                (rightHandBefore[0] - headX) ** 2 +
+                (rightHandBefore[1] - headY) ** 2 +
+                (rightHandBefore[2] - headZ) ** 2
+            );
+
+            const handsDistance = Math.sqrt(
+                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
+                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
+                (leftHandBefore[2] - rightHandBefore[2]) ** 2
+            );
+
+            // if conditions meet we increment the trigger counter
+            if (distanceToHeadLeft < headProximityThreshold &&
+                handsDistance > handDistanceThreshold &&
+                leftHandVelBefore.length === 3 &&
+                rightHandVelBefore.length === 3 &&
+                Math.abs(leftHandVelBefore[0]) < velTh &&
+                Math.abs(leftHandVelBefore[1]) < velTh &&
+                Math.abs(leftHandVelBefore[2]) < velTh) {
+                    triggerCounter += 1;
+                    console.log("PATTERN9 Trigger counter: ", triggerCounter);
+            }
+
+            if (distanceToHeadRight < headProximityThreshold &&
+                handsDistance > handDistanceThreshold &&
+                leftHandVelBefore.length === 3 &&
+                rightHandVelBefore.length === 3 &&
+                Math.abs(rightHandVelBefore[0]) < velTh &&
+                Math.abs(rightHandVelBefore[1]) < velTh &&
+                Math.abs(rightHandVelBefore[2]) < velTh) {
+                    triggerOffCounter += 1;
+                    console.log("PATTERN9 Trigger OFF counter: ", triggerCounter);
+            }
+
+            //PATTERN 12 trigger
+            if (handsDistance < handDistanceThresholdHandsOn &&
+                leftHandBefore.length === 3 &&
+                rightHandBefore.length === 3 &&
+                headBefore.length === 3 &&
+                leftHandBefore[2] > headBefore[2] &&
+                rightHandBefore[2] > headBefore[2] &&
+                (Date.now() - timeWhenLastTriggerHandsOn) > 5000) {
+                    handsOnTriggerCounter += 1;
+                    console.log("PATTERN12 Hands-on Trigger counter: ", handsOnTriggerCounter);
+            }
+        }
+
+        if (handsOnTriggerCounter >= stabilityNumTimesteps &&
+           (Date.now() - timeWhenLastTriggerHandsOn) > 5000) {
+            handsOn = !handsOn;
+            handsOnTriggerCounter = 0;
+            timeWhenLastTriggerHandsOn = Date.now();
+            // if handsOn we add hand ids to tracked bodyparts and remove feet if they are in there
+            if (handsOn) {
+                if (!trackedBodyParts.includes(bodyPartsIndex['left_hand'])) {
+                    trackedBodyParts.push(bodyPartsIndex['left_hand']);
+                }
+                if (!trackedBodyParts.includes(bodyPartsIndex['right_hand'])) {
+                    trackedBodyParts.push(bodyPartsIndex['right_hand']);
+                }
+                // remove feet if in trackedBodyParts
+                const leftFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_foot']);
+                if (leftFootIndex > -1) {
+                    trackedBodyParts.splice(leftFootIndex, 1);
+                }
+                const rightFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_foot']);
+                if (rightFootIndex > -1) {
+                    trackedBodyParts.splice(rightFootIndex, 1);
+                }
+            } else {
+               //removing hands, adding feet to be tracked
+                const leftHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_hand']);
+                if (leftHandIndex > -1) {
+                    trackedBodyParts.splice(leftHandIndex, 1);
+                }
+                const rightHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_hand']);
+                if (rightHandIndex > -1) {
+                    trackedBodyParts.splice(rightHandIndex, 1);
+                }
+                if (!trackedBodyParts.includes(bodyPartsIndex['left_foot'])) {
+                    trackedBodyParts.push(bodyPartsIndex['left_foot']);
+                }
+                if (!trackedBodyParts.includes(bodyPartsIndex['right_foot'])) {
+                    trackedBodyParts.push(bodyPartsIndex['right_foot']);
+                }
+            }
+
+            for (let i = 0; i < 20; i++) {
+                    console.log("PATTERN9 Creating swirl splats to signal activation");
+                    let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                    let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
+                    let swirlPosXstart = normX * canvas.clientWidth;
+                    let swirlPosYstart = normY * canvas.clientHeight;
+                    const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                    updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                    // Color based on direction of movement
+                    swirlPointer.color = { r: 1.0, g: 1.0, b: 1.0}; // random color
+                    // Move the splat  like a firework away from the start position randomly in 100 step
+                    let swirlPosX = swirlPosXstart;
+                    let swirlPosY = swirlPosYstart;
+                    for (let step = 0; step < 50; step++) {
+                        const offsetXMove = (Math.random() - 0.5) * 100;
+                        const offsetYMove = (Math.random() - 0.5) * 100;
+                        swirlPosX = swirlPosX + offsetXMove;
+                        swirlPosY = swirlPosY + offsetYMove;
+                        updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                        swirlPointer.moved = true; // force the splat
+                        swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                    }
+                }
+
+            // Feedback
+            console.log("PATTERN12 Hands-on mode toggled to ", handsOn);
+        }
+
+        if (triggerCounter >= stabilityNumTimesteps) {
+                headTiltColorMode = true;
+                config.bloom = true;
+                console.log("PATTERN9 Head tilt color mode ACTIVATED");
+                triggerCounter = 0;
+                timeWhenLastTrigger = Date.now();
+                // Showing on status
+                for (let i = 0; i < 20; i++) {
+                    console.log("PATTERN9 Creating swirl splats to signal activation");
+                    let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                    let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
+                    let swirlPosXstart = normX * canvas.clientWidth;
+                    let swirlPosYstart = normY * canvas.clientHeight;
+                    const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                    updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                    // Color based on direction of movement
+                    swirlPointer.color = { r: Math.random(), g: Math.random(), b: Math.random()}; // random color
+                    // Move the splat  like a firework away from the start position randomly in 100 step
+                    let swirlPosX = swirlPosXstart;
+                    let swirlPosY = swirlPosYstart;
+                    for (let step = 0; step < 50; step++) {
+                        const offsetXMove = (Math.random() - 0.5) * 100;
+                        const offsetYMove = (Math.random() - 0.5) * 100;
+                        swirlPosX = swirlPosX + offsetXMove;
+                        swirlPosY = swirlPosY + offsetYMove;
+                        updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                        swirlPointer.moved = true; // force the splat
+                        swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                    }
+                }
+        }
+
+        if (triggerOffCounter >= stabilityNumTimesteps) {
+                headTiltColorMode = false;
+                config.bloom = false;
+                console.log("PATTERN9 Head tilt color mode DEACTIVATED");
+                triggerOffCounter = 0;
+                timeWhenLastTrigger = Date.now();
+                for (let i = 0; i < 20; i++) {
+                    console.log("PATTERN9 Creating swirl splats to signal activation");
+                    let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                    let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
+                    let swirlPosXstart = normX * canvas.clientWidth;
+                    let swirlPosYstart = normY * canvas.clientHeight;
+                    const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                    updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                    // Color based on direction of movement
+                    swirlPointer.color = { r: 1.0, g: 0.2, b: 0.2}; // cyan for upward
+                    // Move the splat  like a firework away from the start position randomly in 100 step
+                    let swirlPosX = swirlPosXstart;
+                    let swirlPosY = swirlPosYstart;
+                    for (let step = 0; step < 50; step++) {
+                        const offsetXMove = (Math.random() - 0.5) * 100;
+                        const offsetYMove = (Math.random() - 0.5) * 100;
+                        swirlPosX = swirlPosX + offsetXMove;
+                        swirlPosY = swirlPosY + offsetYMove;
+                        updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                        swirlPointer.moved = true; // force the splat
+                        swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                    }
+                }
+        }
+
+        //PATTERN 11: Vertical hand swirl: when hand moves up or down quickly (vertical velocity component) we create swirl effect
+        // by adding N randomly moving short mini splats around the hand position
+        //params
+        const swirlVelocityThreshold = 2500; // velocity above which swirl is created
+        const numSwirlSplat = 5; // number of mini splats to create per update
+        const swirlSteps = 300; // number of steps to move the swirl splats
+        const moveOffsetSpeed = 35; // maximum offset radius during movement (how spread out sparkles are)
+
+        // Enabling microsplats mode by moving both hand down quickly reaching depth of 500
+        const microsplatHandDistanceThreshold = 1000; // distance below which microsplat mode is activated
+        const microsplatHandDepthThreshold = 500; // depth below which microsplat mode is activated
+        const microsplatVelocityThreshold = 2500; // vertical velocity above which microsplat mode is toggled
+        if (leftHandBefore.length === 3 && rightHandBefore.length === 3 && leftHandVelBefore.length === 3 && rightHandVelBefore.length === 3) {
+            const distanceBetweenHands = Math.sqrt(
+                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
+                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
+                (leftHandBefore[2] - rightHandBefore[2]) ** 2
+            );
+            const leftHandVz = leftHandVelBefore[2];
+            const rightHandVz = rightHandVelBefore[2];
+            const leftHandDepth = leftHandBefore[2];
+            const rightHandDepth = rightHandBefore[2];
+            const headDepth = headBefore.length === 3 ? headBefore[2] : 3000;
+            if (leftHandVz > microsplatVelocityThreshold && rightHandVz < -microsplatVelocityThreshold && !microsplatActive &&
+                distanceBetweenHands > microsplatHandDistanceThreshold && leftHandDepth > headDepth) {
+                console.log("MICROSPLAT ON");
+                microsplatActive = true;
+                // Signalling activeation by triggering microsplats  at head position
+                for (let i = 0; i < numSwirlSplat; i++) {
+                let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
+                let swirlPosXstart = normX * canvas.clientWidth;
+                let swirlPosYstart = normY * canvas.clientHeight;
+                const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                // Color based on direction of movement
+                swirlPointer.color = { r: 0.0, g: 1.0, b: 0.0 }; // cyan for upward
+                // Move the splat  like a firework away from the start position randomly in 100 step
+                let swirlPosX = swirlPosXstart;
+                let swirlPosY = swirlPosYstart;
+                for (let step = 0; step < swirlSteps; step++) {
+                    const offsetXMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                    const offsetYMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                    swirlPosX = swirlPosX + offsetXMove;
+                    swirlPosY = swirlPosY + offsetYMove;
+                    updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                    swirlPointer.moved = true; // force the splat
+                    swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                    }
+            }
+            } else if (leftHandVz < -microsplatVelocityThreshold && rightHandVz > microsplatVelocityThreshold && microsplatActive &&
+                       distanceBetweenHands > microsplatHandDistanceThreshold && rightHandDepth > headDepth) {
+                microsplatActive = false;
+                console.log("MICROSPLAT OFF");
+                // Signalling deactiveation by triggering microsplats  at head position
+                for (let i = 0; i < numSwirlSplat; i++) {
+                let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2 ) + arena_y) / (2 * arena_y);
+                let swirlPosXstart = normX * canvas.clientWidth;
+                let swirlPosYstart = normY * canvas.clientHeight;
+                const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                // Color based on direction of movement
+                swirlPointer.color = { r: 1.0, g: 0.0, b: 0.0 }; // cyan for upward
+                // Move the splat  like a firework away from the start position randomly in 100 step
+                let swirlPosX = swirlPosXstart;
+                let swirlPosY = swirlPosYstart;
+                for (let step = 0; step < swirlSteps; step++) {
+                    const offsetXMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                    const offsetYMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                    swirlPosX = swirlPosX + offsetXMove;
+                    swirlPosY = swirlPosY + offsetYMove;
+                    updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                    swirlPointer.moved = true; // force the splat
+                    swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                }
+                }
+              }
+
+        }
+
+        let activatedSwirlVelocityThreshold = 1600
+        let minVz = activatedSwirlVelocityThreshold;
+        let maxVz = 3500;
+        let dynNumSwirlSplatMax = 6;
+        // Carrying out microsplats if active
+        if (microsplatActive && (m.id === bodyPartsIndex['right_hand'] || m.id === bodyPartsIndex['left_hand'])) {
+            if (typeof m.vz === 'number') {
+                const vz = m.vz; // vertical velocity
+                if (Math.abs(vz) > activatedSwirlVelocityThreshold) {
+                    console.log("Creating swirl for hand ID ", m.id, " with vz ", vz);
+                    // calculating number of splats according to vz magnitude, normalizing between minVz and maxVz
+                    let dynNumSwirlSplat = Math.floor((Math.abs(m.vz) - minVz) / (maxVz - minVz) * dynNumSwirlSplatMax);
+                    for (let i = 0; i < dynNumSwirlSplat; i++) {
+                        let swirlPosXstart = posX;
+                        let swirlPosYstart = posY;
+                        const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                        updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                        // Color based on direction of movement
+                        if (vz > 0) {
+                            swirlPointer.color = { r: 0.0, g: 1.0, b: 1.0 }; // cyan for upward
+                        } else {
+                            swirlPointer.color = { r: 1.0, g: 0.0, b: 1.0 }; // magenta for downward
+                        }
+                        // Move the splat  like a firework away from the start position randomly in 100 step
+                        let swirlPosX = swirlPosXstart;
+                        let swirlPosY = swirlPosYstart;
+                        for (let step = 0; step < swirlSteps; step++) {
+                            const offsetXMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                            const offsetYMove = (Math.random() - 0.5) * moveOffsetSpeed;
+                            swirlPosX = swirlPosX + offsetXMove;
+                            swirlPosY = swirlPosY + offsetYMove;
+                            updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                            swirlPointer.moved = true; // force the splat
+                            swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                        }
+                        console.log("Swirl pointer: ", swirlPointer);
+                    }
+                }
+            }
+        }
+
+
+        // Change color according to head tilt if mode is activated
+        if (headTiltColorMode && m.id === bodyPartsIndex['head']) {
+            let pitch = m.roll; // in degrees, positive when leaning forward
+            let rawPitch = m.roll;
+            // Map pitch between -90 (facing up) and 60 (facing down) to palette indices between 0 and 200
+            const minPitch = -40;
+            const maxPitch = 30;
+            if (pitch < minPitch) pitch = minPitch;
+            if (pitch > maxPitch) pitch = maxPitch;
+            const pitchNorm = (pitch - minPitch) / (maxPitch - minPitch);
+            let minHue = 360 * pitchNorm; // from 0 to 360
+            let maxHue = minHue + 120; // span of 300 degrees
+            // generating palette of 100 colors between minHue and maxHue
+            colorPalette.length = 0;
+            for (let i = 0; i <= 99; i++) {
+                const hue = minHue - (i / 99) * (minHue - maxHue);
+                const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
+                colorPalette.push(rgb);
+            }
+            console.log("Head raw pitch: ", rawPitch, "clamped: ", pitch, " setting color palette hues between: ", minHue, "-", maxHue);
+        }
+
+        // set back to default palette if mode is not activated
+        if (!headTiltColorMode) {
+            colorPalette = defaultColorPalette.slice();
+        }
+
+
+        // Updating memory variables
+        leftFootZBefore = m.id === bodyPartsIndex['left_foot'] ? m.z : leftFootZBefore;
+        rightFootZBefore = m.id === bodyPartsIndex['right_foot'] ? m.z : rightFootZBefore;
+        leftHandBefore = m.id === bodyPartsIndex['left_hand'] ? [m.x, m.y, m.z] : leftHandBefore;
+        rightHandBefore = m.id === bodyPartsIndex['right_hand'] ? [m.x, m.y, m.z] : rightHandBefore;
+        chestFrontBefore = m.id === bodyPartsIndex['chest_front'] ? [m.x, m.y, m.z] : chestFrontBefore;
+        chestBackBefore = m.id === bodyPartsIndex['chest_back'] ? [m.x, m.y, m.z] : chestBackBefore;
+        leftFootBefore = m.id === bodyPartsIndex['left_foot'] ? [m.x, m.y, m.z] : leftFootBefore;
+        rightFootBefore = m.id === bodyPartsIndex['right_foot'] ? [m.x, m.y, m.z] : rightFootBefore;
+        headBefore = m.id === bodyPartsIndex['head'] ? [m.x, m.y, m.z] : headBefore;
+        leftHandVelBefore = m.id === bodyPartsIndex['left_hand'] ? [m.vx, m.vy, m.vz] : leftHandVelBefore;
+        rightHandVelBefore = m.id === bodyPartsIndex['right_hand'] ? [m.vx, m.vy, m.vz] : rightHandVelBefore;
+
+        if (trackedBodyParts.includes(m.id)) {
+            // Defining the parameters of the splat to be visualized and save it in the pointer move data
+            updatePointerMoveData(pointer, posX, posY, splatRadius=splatRadius);
+            //console.log("Fall body part pointer: ", pointer);
+
+            // Auto-release after a short silence so pointers don't stay "stuck down"
+            clearTimeout(pointer._autoUpTimer);
+            pointer._autoUpTimer = setTimeout(() => {
+                updatePointerUpData(pointer);
+            }, 60); // ms; tweak to taste for smoother/continuous drags
+        };
     });
 })();
 
@@ -1864,7 +2658,7 @@ function updatePointerDownData(pointer, id, posX, posY) {
     pointer.color = generateColor();
 }
 
-function updatePointerMoveData(pointer, posX, posY) {
+function updatePointerMoveData(pointer, posX, posY, splatRadius=null) {
     pointer.prevTexcoordX = pointer.texcoordX;
     pointer.prevTexcoordY = pointer.texcoordY;
     pointer.texcoordX = posX / canvas.width;
@@ -1872,6 +2666,7 @@ function updatePointerMoveData(pointer, posX, posY) {
     pointer.deltaX = correctDeltaX(pointer.texcoordX - pointer.prevTexcoordX);
     pointer.deltaY = correctDeltaY(pointer.texcoordY - pointer.prevTexcoordY);
     pointer.moved = Math.abs(pointer.deltaX) > 0 || Math.abs(pointer.deltaY) > 0;
+    pointer.splatRadius = splatRadius;
 }
 
 function updatePointerUpData(pointer) {

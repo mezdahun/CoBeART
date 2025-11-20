@@ -22,79 +22,83 @@ function cleanupEntities() {
     }
 }
 
-// Connect to the WebSocket and log data
-window.viewerSocket = io("/viewer", { transports: ["websocket"] });
-window.viewerSocket.on('frame', (payload) => {
-    if (!payload || !payload.rigidbodies) return;
+// // Connect to the WebSocket and log data
+// window.viewerSocket = io("/viewer", { transports: ["websocket"] });
+
+// Listen to messages arriving from bridge-script. We do not connect individual shaders to the raw
+// data input, but share a common bridge-script that redistributes the data to all shaders.
+window.addEventListener('message', (e) => {
+    const m = e.data;
+    //    printing receuived data
+    console.log('Received message:', m);
+    if (!m || m.type !== 'splat') return;
 
     const seenIds = new Set();
 
-    for (const rb of payload.rigidbodies) {
-        seenIds.add(rb.ID);
+    seenIds.add(m.id);
 
-        if (!trackedEntities[rb.ID]) {
-            let newIndex = -1;
-            const usedIndices = Object.values(trackedEntities).map(e => e.index);
-            for (let i = 1; i < MAX_BODIES; i++) {
-                if (!usedIndices.includes(i)) {
-                    newIndex = i;
-                    break;
-                }
+    if (!trackedEntities[m.id]) {
+        let newIndex = -1;
+        const usedIndices = Object.values(trackedEntities).map(e => e.index);
+        for (let i = 1; i < MAX_BODIES; i++) {
+            if (!usedIndices.includes(i)) {
+                newIndex = i;
+                break;
             }
-
-            if (newIndex === -1) {
-                console.log("Max number of tracked bodies reached.");
-                continue;
-            }
-
-            trackedEntities[rb.ID] = {
-                id: rb.ID,
-                index: newIndex,
-                iMouse: new THREE.Vector4(0, 0, 0, 0),
-                iMouseTarget: new THREE.Vector4(0, 0, 0, 0),
-                lastSeen: Date.now(),
-                stationaryTimer: null,
-                timeoutTimer: null,
-            };
         }
 
-        const entity = trackedEntities[rb.ID];
-        entity.lastSeen = Date.now();
-        if (entity.timeoutTimer) clearTimeout(entity.timeoutTimer);
+        if (newIndex === -1) {
+            console.log("Max number of tracked bodies reached.");
+            return;
+        }
 
-        const absVel = Math.sqrt(rb.vx * rb.vx + rb.vy * rb.vy);
+        trackedEntities[m.id] = {
+            id: m.id,
+            index: newIndex,
+            iMouse: new THREE.Vector4(0, 0, 0, 0),
+            iMouseTarget: new THREE.Vector4(0, 0, 0, 0),
+            lastSeen: Date.now(),
+            stationaryTimer: null,
+            timeoutTimer: null,
+        };
+    }
 
-        if (absVel < STATIONARY_VELOCITY_THRESHOLD) {
-            if (!entity.stationaryTimer) {
-                entity.stationaryTimer = setTimeout(() => {
-                    entity.iMouseTarget.set(0, 0, 0, 0);
-                    entity.stationaryTimer = null;
-                }, STATIONARY_TIMEOUT);
-            }
-        } else {
-            if (entity.stationaryTimer) {
-                clearTimeout(entity.stationaryTimer);
+    const entity = trackedEntities[m.id];
+    entity.lastSeen = Date.now();
+    if (entity.timeoutTimer) clearTimeout(entity.timeoutTimer);
+
+    const absVel = Math.sqrt(m.vx * m.vx + m.vy * m.vy);
+
+    if (absVel < STATIONARY_VELOCITY_THRESHOLD) {
+        if (!entity.stationaryTimer) {
+            entity.stationaryTimer = setTimeout(() => {
+                entity.iMouseTarget.set(0, 0, 0, 0);
                 entity.stationaryTimer = null;
-            }
-
-            const arena_x = 3000;
-            const arena_y = 3000;
-            const norm_x = (-rb.x + arena_x) / (2 * arena_x);
-            const norm_y = (rb.y + arena_y) / (2 * arena_y);
-            const pixelRatio = window.devicePixelRatio;
-            const screenX = norm_x * window.innerWidth * pixelRatio;
-            const screenY = (1.0 - norm_y) * window.innerHeight * pixelRatio;
-
-            if (entity.iMouseTarget.z === 0 && entity.iMouseTarget.w === 0) {
-                entity.iMouse.x = screenX;
-                entity.iMouse.y = screenY;
-            }
-
-            entity.iMouseTarget.x = screenX;
-            entity.iMouseTarget.y = screenY;
-            entity.iMouseTarget.z = screenX;
-            entity.iMouseTarget.w = screenY;
+            }, STATIONARY_TIMEOUT);
         }
+    } else {
+        if (entity.stationaryTimer) {
+            clearTimeout(entity.stationaryTimer);
+            entity.stationaryTimer = null;
+        }
+
+        const arena_x = 3000;
+        const arena_y = 3000;
+        const norm_x = (-m.x + arena_x) / (2 * arena_x);
+        const norm_y = (m.y + arena_y) / (2 * arena_y);
+        const pixelRatio = window.devicePixelRatio;
+        const screenX = norm_x * window.innerWidth * pixelRatio;
+        const screenY = (1.0 - norm_y) * window.innerHeight * pixelRatio;
+
+        if (entity.iMouseTarget.z === 0 && entity.iMouseTarget.w === 0) {
+            entity.iMouse.x = screenX;
+            entity.iMouse.y = screenY;
+        }
+
+        entity.iMouseTarget.x = screenX;
+        entity.iMouseTarget.y = screenY;
+        entity.iMouseTarget.z = screenX;
+        entity.iMouseTarget.w = screenY;
     }
 
     for (const id in trackedEntities) {
@@ -510,6 +514,26 @@ function init() {
         }
         iMouseArray[0].set(0, 0, 0, 0);
         iMouseTarget.set(0, 0, 0, 0);
+    });
+
+    // Accept cursor events from composite parent
+    window.addEventListener('message', (e) => {
+        const m = e.data;
+        if (!m || m.type !== 'cursor') return;
+        const pixelRatio = window.devicePixelRatio;
+        const x = m.x * window.innerWidth * pixelRatio;
+        const y = m.y * window.innerHeight * pixelRatio;
+        if (m.down) {
+            iJustClickedArray[0] = 1.0;
+            iMouseArray[0].set(x, y, x, y);
+            iMouseTarget.copy(iMouseArray[0]);
+        } else if (m.up) {
+            iMouseArray[0].set(0, 0, 0, 0);
+            iMouseTarget.set(0, 0, 0, 0);
+        } else {
+            iMouseTarget.x = x;
+            iMouseTarget.y = y;
+        }
     });
 
     document.addEventListener('keydown', (e) => {

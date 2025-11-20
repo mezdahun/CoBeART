@@ -21,6 +21,7 @@
 import sys
 import time
 
+import numpy as np
 from scipy.spatial.transform import Rotation
 
 import cobeart.settings.streaming as otsettings
@@ -29,6 +30,8 @@ from cobeart.packagesender import sender
 from cobeart.optitrackclient.NatNetClient import NatNetClient
 import cobeart.optitrackclient.DataDescriptions as DataDescriptions
 import cobeart.optitrackclient.MoCapData as MoCapData
+
+from scipy.spatial.transform import Rotation as R
 
 # global variable to store and update the tracked rigid bodies
 rigid_bodies = {}
@@ -49,6 +52,99 @@ def receive_new_frame(data_dict):
     generate_output(list_to_write)
 
 
+def head_tilt_from_quat(q_xyzw, axis_local):
+    """
+    q_xyzw: OptiTrack quaternion [x, y, z, w]
+    axis_local: unit axis in the rigid body's LOCAL frame that corresponds to ear-to-ear
+                e.g. np.array([1,0,0]) if local X is left-right
+    returns: tilt angle in degrees (twist around axis_local), sign included
+    """
+    x, y, z, w = q_xyzw
+    v = np.array([x, y, z], dtype=float)      # vector part
+    a = axis_local / np.linalg.norm(axis_local)
+
+    # project quaternion's vector part onto the chosen axis -> keep only rotation around that axis
+    v_parallel = np.dot(v, a) * a
+
+    # build "twist" quaternion: same w, only the component of v along a
+    q_twist = np.concatenate([v_parallel, [w]])
+    norm = np.linalg.norm(q_twist)
+    if norm < 1e-8:
+        return 0.0
+    q_twist /= norm
+
+    x_t, y_t, z_t, w_t = q_twist
+    v_t = np.array([x_t, y_t, z_t])
+
+    # angle of the twist
+    angle = 2 * np.arctan2(np.linalg.norm(v_t), w_t)
+
+    # sign according to direction along axis
+    if np.dot(v_t, a) < 0:
+        angle = -angle
+
+    return np.degrees(angle)
+
+import math
+import numpy as np
+
+def quaternion_to_rotation_matrix(q):
+    x, y, z, w = q
+    return [[ w*w + x*x - y*y - z*z,       2*(x*y - w*z),               2*(x*z + w*y)         ],
+            [ 2*(x*y + w*z),               w*w - x*x + y*y - z*z,       2*(y*z - w*x)         ],
+            [ 2*(x*z - w*y),               2*(y*z + w*x),               w*w - x*x - y*y + z*z ]]
+
+def quaternion_to_xaxis_yaxis(q):
+    x, y, z, w = q
+    xaxis = [ w*w + x*x - y*y - z*z,       2*(x*y + w*z),             2*(x*z - w*y) ]
+    yaxis = [ 2*(x*y - w*z),               w*w - x*x + y*y - z*z,     2*(y*z + w*x) ]
+    return xaxis, yaxis
+
+def heading_and_tilt_from_quat(q, world_up=np.array([0.0, 1.0, 0.0])):
+    """
+    q: OptiTrack quaternion [x, y, z, w]
+    world_up: global up vector; use [0,0,1] if Z-up
+
+    Returns:
+      heading_deg: rotation around world_up (yaw)
+      tilt_deg:    pure ear-to-shoulder tilt around local forward axis
+    """
+    # 1) Get axes in world coords
+    xaxis, yaxis = quaternion_to_xaxis_yaxis(q)
+    x = np.array(xaxis, dtype=float)
+    y = np.array(yaxis, dtype=float)
+    x /= np.linalg.norm(x)
+    y /= np.linalg.norm(y)
+
+    U = world_up / np.linalg.norm(world_up)
+
+    # 2) Forward axis = local Z in world coords = X × Y
+    z = np.cross(x, y)
+    z /= np.linalg.norm(z)
+
+    # 3) HEADING: angle of forward (or xaxis) in ground plane
+    #    Here we assume Y-up world, so ground plane is XZ.
+    #    If your world is Z-up, adapt accordingly.
+    heading_rad = math.atan2(z[0], z[2])   # or use x[2], x[0], depending what you prefer
+    heading_deg = math.degrees(heading_rad)
+
+    # 4) TILT: rotation of head around its own forward axis, independent of yaw & nod.
+    #    Plane spanned by (U, z) has normal n.
+    n = np.cross(U, z)
+    n_norm = np.linalg.norm(n)
+    if n_norm < 1e-6:
+        # forward ~ parallel to up; tilt not well-defined
+        tilt_deg = 0.0
+    else:
+        n /= n_norm
+        # y moves out of that plane only when the head tilts ear-to-shoulder
+        s = float(np.clip(np.dot(y, n), -1.0, 1.0))
+        tilt_rad = math.asin(s)
+        tilt_deg = math.degrees(tilt_rad)
+
+    return heading_deg, tilt_deg
+
+
 # This is a callback function that gets connected to the NatNet client. It is called once per rigid body per frame
 def receive_rigid_body_frame(new_id, position, rotation):
     global rigid_bodies
@@ -60,18 +156,37 @@ def receive_rigid_body_frame(new_id, position, rotation):
         y = position[2] * 1000  # mm
 
         # transforming rotation angles from quaternion to Euler (degree)
-        rot_df = [rotation[3], rotation[0], rotation[1], rotation[2]]
-        rot = Rotation.from_quat(rot_df)
+        rot_df = [rotation[0], rotation[1], rotation[2], rotation[3]]
+        rot = Rotation.from_quat([rotation[0], rotation[1], rotation[2], rotation[3]])
         rot_euler = rot.as_euler('xyz', degrees=True)
-        roll = rot_euler[0]
-        yaw = rot_euler[1]
-        pitch = rot_euler[2]
+        tilt1 = Rotation.from_quat(rot_df).as_euler('xzy', degrees=True)[0]
+        tilt2 = Rotation.from_quat(rot_df).as_euler('zxy', degrees=True)[0]
+        tilt3 = Rotation.from_quat(rot_df).as_euler('zyx', degrees=True)[0]
+        tilt4 = Rotation.from_quat(rot_df).as_euler('yzx', degrees=True)[0]
+        tilt5 = Rotation.from_quat(rot_df).as_euler('yxz', degrees=True)[0]
+        tilt1g = Rotation.from_quat(rot_df).as_euler('XZY', degrees=True)[0]
+        tilt2g = Rotation.from_quat(rot_df).as_euler('ZXY', degrees=True)[0]
+        tilt3g = Rotation.from_quat(rot_df).as_euler('ZYX', degrees=True)[0]
+        tilt4g = Rotation.from_quat(rot_df).as_euler('YZX', degrees=True)[0]
+        tilt5g = Rotation.from_quat(rot_df).as_euler('YXZ', degrees=True)[0]
+        q = [rotation[0], rotation[1], rotation[2], rotation[3]]  # OptiTrack [x,y,z,w]
+        # heading, head_tilt = heading_and_tilt_from_quat(q)
+        # print(f"tilts: xzy: {tilt1:.2f}, zxy: {tilt2:.2f}, zyx: {tilt3:.2f}, yzx: {tilt4:.2f}, yxz: {tilt5:.2f}")
+        # print(f"       XZY: {tilt1g:.2f}, ZXY: {tilt2g:.2f}, ZYX: {tilt3g:.2f}, YZX: {tilt4g:.2f}, YXZ: {tilt5g:.2f}")
+        # print(f"heading: {heading:.2f}, head_tilt: {head_tilt:.2f}")
+        # roll = rot_euler[0]
+        # yaw = rot_euler[1]
+        # pitch = rot_euler[2]
+        # tilt_axis_local = np.array([1.0, 0.0, 0.0])
+        # tilt = head_tilt_from_quat([rotation[0], rotation[1], rotation[2], rotation[3]], tilt_axis_local)
 
         # updating rigid body along Motive ID
-        rigid_bodies[new_id] = [x, y, z, roll, yaw, pitch]
+        rigid_bodies[new_id] = [x, y, z, tilt1, tilt2, tilt3]
     else:
         print(f"Rigid body ID is too high: {new_id}. The maximum number of tracked rigid"
               f" bodies is {otsettings.max_num_objects}! Update settings if necessary.")
+
+
 
 
 def add_lists(totals, totals_tmp):
