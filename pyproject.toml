@@ -54,11 +54,15 @@ cobeart = [
     "tinyflux",
     "filterpy",
     "python-socketio[client]",
+    "soundcard",
+    "pygame",
+    # Note: madmom is required for beat detection but must be installed from source
+    # Install from the madmom/ directory with: pip install -e ./madmom
+    # See beat detector module docstrings for implementation details
 ]
 
 [project.scripts]
 start-optitrack-client = "cobeart.optitrackclient.start_client:start"
-start-audio-client = "cobeart.audiocapture.capture:main"
 
 [project.urls]
 Homepage = "https://github.com/mezdahun/CoBeART"

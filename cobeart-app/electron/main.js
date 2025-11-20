@@ -27,6 +27,22 @@ function startHttpServer() {
   let lastFrame = null;
   let lastAudioData = null;
 
+  // Health check endpoint
+  appx.get('/health', (req, res) => {
+    const audioAge = lastAudioData ? Date.now() - lastAudioData.timestamp : null;
+    const frameAge = lastFrame ? Date.now() - lastFrame.timestamp : null;
+    res.json({
+      server: 'ok',
+      namespaces: {
+        ingest: io.of('/ingest').sockets.size,
+        audio: io.of('/audio').sockets.size,
+        viewer: io.of('/viewer').sockets.size
+      },
+      lastAudioAge: audioAge,
+      lastFrameAge: frameAge
+    });
+  });
+
   // STEP 1a: The '/audio' namespace - dedicated channel for audio metrics only
   const audio = io.of('/audio');
   audio.on('connection', (socket) => {
@@ -34,13 +50,29 @@ function startHttpServer() {
 
     // Audio metrics data - updates background state, doesn't drive emissions
     socket.on('audio_metrics', (audioData) => {
+      // Enhanced validation
       if (!audioData || typeof audioData !== 'object') return;
 
-      // Store latest audio data with timestamp
-      lastAudioData = {
-        ...audioData,
-        timestamp: Date.now()
-      };
+      // Validate expected fields
+      const requiredFields = ['rms', 'peak', 'zcr', 'dominant_frequency'];
+      const hasAllFields = requiredFields.every(field =>
+        typeof audioData[field] === 'number' && !isNaN(audioData[field])
+      );
+
+      if (!hasAllFields) {
+        console.warn('[electron] Invalid audio_metrics payload:', audioData);
+        return;
+      }
+
+      try {
+        // Store latest audio data with timestamp
+        lastAudioData = {
+          ...audioData,
+          timestamp: Date.now()
+        };
+      } catch (err) {
+        console.error('[electron] Error processing audio_metrics:', err);
+      }
     });
 
     socket.on('disconnect', () => {
@@ -98,6 +130,7 @@ function createWindow(shader, usePerfMode) {
     useContentSize: true,
     backgroundColor: '#000000',
     autoHideMenuBar: true,
+    show: false, // Don't show window until it's ready
     webPreferences: {
       // The preload script is a bridge between Electron's Node.js environment
       // and the sandboxed browser environment of the window, allowing for
@@ -116,11 +149,34 @@ function createWindow(shader, usePerfMode) {
     if (usePerfMode) {
       url += '?performance=true';
     }
+  } else if (shader === 'ink') {
+    url = `http://127.0.0.1:${PORT}/ink/`;
+  } else if (shader === 'mixed') {
+    url = `http://127.0.0.1:${PORT}/composite/`;
   }
-  win.loadURL(url);
+  // Wait for the window to be ready before opening DevTools and injecting variables
   win.webContents.on('did-finish-load', () => {
     win.webContents.executeJavaScript(`window.__SOCKET_PORT__=${PORT}`);
+
+    // Show window once content is loaded to prevent GPU errors
+    win.show();
+
+    // Opening devtools breaks ink visualization
+    // Only open devtools if shader is not 'ink', and do it after page load
+    if (shader !== 'ink') {
+      // Small delay to ensure page is fully initialized
+      setTimeout(() => {
+        win.webContents.openDevTools();
+      }, 100);
+    }
   });
+
+  // Handle the case where the window is ready before content loads
+  win.once('ready-to-show', () => {
+    // Window is ready to be shown, but we'll wait for did-finish-load
+  });
+
+  win.loadURL(url);
 }
 
 // Electron's initialization is asynchronous. This block executes once the app is ready.
@@ -129,16 +185,16 @@ app.whenReady().then(() => {
 
   const choice = dialog.showMessageBoxSync({
     type: 'question',
-    buttons: ['Splat', 'Molten'],
+    buttons: ['Splat', 'Molten', 'Ink', 'Mixed'],
     defaultId: 0,
     title: 'Choose Visualization',
     message: 'Which visualization would you like to use?',
-    detail: 'Splat is a fluid simulation. Molten is an alternative.',
+    detail: 'Splat: fluid simulation. Molten: reflective shader. Ink: Dark fluid with washed contours. Mixed: spatial blend.',
     checkboxLabel: 'Performance Mode (Molten only)',
     checkboxChecked: false
   });
 
-  const shader = choice === 0 ? 'splat' : 'molten';
+  const shader = ['splat', 'molten', 'ink', 'mixed'][choice];
   const usePerfMode = choice.checkboxChecked;
 
   createWindow(shader, usePerfMode);

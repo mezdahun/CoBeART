@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>CoBeArt — Mixed (Composite)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/shared-border.css">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; width: 100%; background: black; overflow: hidden; }
+    canvas { display: block; }
+    /* Keep iframes rendered at full size but invisible and non-interactive */
+    /* Note that currently showInteractiveElements in composite.js controls this
+     if false: we always hide iframes and only stream their content
+     if true: we show the original iframe after animation for intraction with cursor, etc
+     This latter on the other hand causes small jitters before animations and should
+     not be used in production*/
+    .offscreen {
+      position: fixed;
+      left: 0; top: 0; right: 0; bottom: 0;
+      width: 100vw; height: 100vh;
+      opacity: 0;
+      pointer-events: none;
+      border: 0;
+      z-index: 0;
+    }
+    #out {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    color: white;
+    background: transparent;
+    z-index: 1; /* Ensure it appears above the iframes */
+    pointer-events: none; /* Prevent interaction */
+  }
+  </style>
+</head>
+
+<body>
+  <pre id="out"></pre>
+  <!-- Including socket.io and three.js libraries -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!--  Defining transitions between shaders -->
+  <script src="./composite.js"></script>
+  <!-- Using fluid-bridge to stream rigid bodies to fluid shader -->
+  <script src="/fluid-bridge.js"></script>
+
+  <!-- Loading each shader as they are defined by their own index.html -->
+  <iframe id="fluidFrame" class="offscreen" src="../fluid/index.html"></iframe>
+  <iframe id="moltenFrame" class="offscreen" src="../molten/index.html"></iframe>
+  <iframe id="inkFrame" class="offscreen" src="../ink/index.html"></iframe>
+
+  <script src="/border-control.js"></script>
+</body>
+
+</html>
+
+

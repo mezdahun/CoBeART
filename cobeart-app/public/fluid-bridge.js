@@ -2,39 +2,41 @@
   function init() {
     // Finds the id=fluidFrame iframe element that was created in the index.html file,
     // and that holds the embedded fluid simulation.
-    let frameEl = document.getElementById('fluidFrame');
-    if (!frameEl) {
-      frameEl = document.createElement('iframe');
-      frameEl.id = 'fluidFrame';
-      frameEl.src = '/fluid/index.html';
-      frameEl.width = 960;
-      frameEl.height = 540;
-      frameEl.style.border = '0';
-      frameEl.style.maxWidth = '100%';
-      const host = document.getElementById('out')?.parentElement || document.body;
-      host.appendChild(document.createElement('h2')).textContent = 'Fluid Simulation';
-      host.appendChild(frameEl);
-    }
+    let frameEl = document.getElementById('fluidFrame') 
+            || document.getElementById('moltenFrame') 
+            || document.getElementById('inkFrame');
+     if (!frameEl) {
+       frameEl = document.createElement('iframe');
+       frameEl.id = 'fluidFrame';
+       frameEl.src = '/fluid/index.html';
+       frameEl.width = 960;
+       frameEl.height = 540;
+       frameEl.style.border = '0';
+       frameEl.style.maxWidth = '100%';
+       const host = document.getElementById('out')?.parentElement || document.body;
+       host.appendChild(document.createElement('h2')).textContent = 'Fluid Simulation';
+       host.appendChild(frameEl);
+     }
 
-    // Create the overlay element for logging
-    let overlay = document.getElementById('textOverlay');
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.id = 'textOverlay';
-      overlay.style.position = 'absolute';
-      overlay.style.top = `${frameEl.offsetTop}px`;
-      overlay.style.left = `${frameEl.offsetLeft}px`;
-      overlay.style.width = `${frameEl.offsetWidth}px`;
-      overlay.style.height = `${frameEl.offsetHeight}px`;
-      overlay.style.pointerEvents = 'none';
-      overlay.style.color = 'white';
-      overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.0)';
-      overlay.style.fontFamily = 'monospace';
-      overlay.style.fontSize = '12px';
-      overlay.style.overflowY = 'auto';
-      overlay.style.padding = '10px';
-      document.body.appendChild(overlay);
-    }
+//     Create the overlay element for logging
+     let overlay = document.getElementById('textOverlay');
+     if (!overlay) {
+       overlay = document.createElement('div');
+       overlay.id = 'textOverlay';
+       overlay.style.position = 'absolute';
+       overlay.style.top = `${frameEl.offsetTop}px`;
+       overlay.style.left = `${frameEl.offsetLeft}px`;
+       overlay.style.width = `${frameEl.offsetWidth}px`;
+       overlay.style.height = `${frameEl.offsetHeight}px`;
+       overlay.style.pointerEvents = 'none';
+       overlay.style.color = 'white';
+       overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.0)';
+       overlay.style.fontFamily = 'monospace';
+       overlay.style.fontSize = '12px';
+       overlay.style.overflowY = 'auto';
+       overlay.style.padding = '10px';
+       document.body.appendChild(overlay);
+     }
 
     // Connects to the /viewer namespace on the server hosted in electron/main.js
     const socket = window.viewerSocket || io('/viewer', { transports: ['websocket'] });
@@ -44,17 +46,22 @@
 
     let fluidReady = true;
     const outbox = [];
-    function flush() {
-      while (outbox.length) frameEl.contentWindow.postMessage(outbox.shift(), '*');
-    }
-    function postToFluid(msg) {
-      if (fluidReady) frameEl.contentWindow.postMessage(msg, '*');
-      else outbox.push(msg);
+
+    // posting messages to all iframes, and to the window itself
+    function postToWindow(msg) {
+      for (const frame of document.querySelectorAll('iframe')) {
+        if (frame.contentWindow) {
+          frame.contentWindow.postMessage(msg, '*');
+        }
+      }
+      // Also broadcast to self (for top-level scripts)
+      window.postMessage(msg, '*');
     }
 
+    //create posting frequency stable
     let latestFrame = null; // Store the latest frame
     let latestAudio = null; // Store the latest audio metrics
-    const bridgeFramerate = 240; // Target bridge framerate in Hz
+    const bridgeFramerate = 120; // Target bridge framerate in Hz
 
     // Receive frames emitted by the electron/main.js server and store the latest one
     socket.on('frame', (payload) => {
@@ -67,7 +74,6 @@
         showOverlay();
       }
     });
-
 
     // Update the overlay with the latest frame data
     function showOverlay() {
@@ -106,7 +112,7 @@ Velocity: (${vx.toFixed(2)}, ${vy.toFixed(2)}, ${vz.toFixed(2)})<br>
 Rotation: (roll: ${roll.toFixed(2)}, pitch: ${pitch.toFixed(2)}, yaw: ${yaw.toFixed(2)})<br>
 Angular Velocity: (vroll: ${vroll.toFixed(2)}, vpitch: ${vpitch.toFixed(2)}, vyaw: ${vyaw.toFixed(2)})<br><br>`;
         }
-        console.log('[fluid-bridge] updating overlay', overlayText);
+//        console.log('[fluid-bridge] updating overlay', overlayText);
         overlay.innerHTML = overlayText; // Update the overlay text
       }
     };
@@ -135,8 +141,8 @@ Angular Velocity: (vroll: ${vroll.toFixed(2)}, vpitch: ${vpitch.toFixed(2)}, vya
           const color = [1, 0.6, 0.2];
           const absVel = rb.abs_vel;
           const normVel = rb.norm_abs_vel;
-          postToFluid({ type: 'splat', id, x, y, z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw, absVel, normVel, color });
-          console.log('DEBUG: sent splat', absVel, normVel);
+          postToWindow({ type: 'splat', id, x, y, z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw, absVel, normVel, color });
+//          console.log('DEBUG: sent splat', absVel, normVel);
           //          const consoleMessage = `[fluid-bridge] sent splat id:${id} pos:(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) vel:(${vx.toFixed(2)}, ${vy.toFixed(2)}, ${vz.toFixed(2)})`;
           //          console.log('[fluid-bridge] sent splat', { id, x, y , z, vx, vy, vz, roll, pitch, yaw, vroll, vpitch, vyaw });
         }
