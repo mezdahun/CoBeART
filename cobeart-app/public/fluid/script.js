@@ -1911,6 +1911,16 @@ window.addEventListener('keydown', e => {
 
     //PATTERN 9 params
     let headTiltColorMode = false;
+    let stabilityNumTimesteps = 10; // condiution has to meet for number of timesteps that triggers the effect
+    let triggerCounter = 0; // counting how many times the condition is met
+    let triggerOffCounter = 0; // counting how many times the OFF condition is met
+    // timepoint of last trigger
+    let timeWhenLastTrigger = Date.now();
+
+    //PATTERN 12 params
+    let handsOn = true; // whether hands or feet are followed with steady splats
+    let handsOnTriggerCounter = 0; // counting how many times the hands-on condition is met
+    let timeWhenLastTriggerHandsOn = Date.now();
 
     //PATTERN 11 params
     let microsplatActive = false; // can be turned on by putting hands together above head
@@ -2100,19 +2110,21 @@ window.addEventListener('keydown', e => {
         }
 
         //PATTERN 5: Unique Feet: Feet are tracked with black (at 0) to gray (at 2000) splat colors according to height
-        if (m.id === bodyPartsIndex['left_foot'] || m.id === bodyPartsIndex['right_foot']) {
-            const posZ = m.z;
-            if (typeof posZ === 'number') {
-                const z = Math.max(0, Math.min(posZ, 2000)) / 8000;
-                const grayValue = z; // between 0 (black) and 1 (white)
-                //black splat means we still can swirl the already existing splats with feet but
-                // foot movement will not make new splats
-                var footColor = { r: 0, g: 0, b: 0 };
-                if (posZ > 500) {
-                    footColor = { r: grayValue, g: grayValue, b: grayValue}
+        if (handsOn) {
+            if (m.id === bodyPartsIndex['left_foot'] || m.id === bodyPartsIndex['right_foot']) {
+                const posZ = m.z;
+                if (typeof posZ === 'number') {
+                    const z = Math.max(0, Math.min(posZ, 2000)) / 8000;
+                    const grayValue = z; // between 0 (black) and 1 (white)
+                    //black splat means we still can swirl the already existing splats with feet but
+                    // foot movement will not make new splats
+                    var footColor = { r: 0, g: 0, b: 0 };
+                    if (posZ > 500) {
+                        footColor = { r: grayValue, g: grayValue, b: grayValue}
+                    }
+                    pointer.color = footColor;
+                    //console.log("Setting foot color to ", footColor, " for z ", posZ);
                 }
-                pointer.color = footColor;
-                //console.log("Setting foot color to ", footColor, " for z ", posZ);
             }
         }
 
@@ -2384,9 +2396,14 @@ window.addEventListener('keydown', e => {
 //        }
 
         //PATTERN 9: Head Tilt Color Palette Shift: changing the color palette slice according to the roll of the head
-        // Head tilt color mode activation by moving right hand close to head
-        const headProximityThreshold = 300; // distance below which head tilt color mode is activated
-        if (leftHandBefore.length === 3 && rightHandBefore.length === 3) {
+        // Head tilt color mode activation by moving right hand close to head and keeping still for 50 timesteps while
+        // right-left hand distance are above threshold
+        const headProximityThreshold = 400; // distance below which head tilt color mode is activated
+        const handDistanceThreshold = 1500; // distance above which head tilt color mode can be activated
+        const handDistanceThresholdHandsOn = 400; // distance below which hands detected to be kept together
+        const velTh = 150; // maximum velocity to consider hand as still
+        if (leftHandBefore.length === 3 && rightHandBefore.length === 3 &&
+           (Date.now() - timeWhenLastTrigger) > 5000) {
             const headX = m.id === bodyPartsIndex['head'] ? m.x : 0;
             const headY = m.id === bodyPartsIndex['head'] ? m.y : 0;
             const headZ = m.id === bodyPartsIndex['head'] ? m.z : 0;
@@ -2403,14 +2420,177 @@ window.addEventListener('keydown', e => {
                 (rightHandBefore[2] - headZ) ** 2
             );
 
-            if (distanceToHeadRight < headProximityThreshold) {
+            const handsDistance = Math.sqrt(
+                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
+                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
+                (leftHandBefore[2] - rightHandBefore[2]) ** 2
+            );
+
+            // if conditions meet we increment the trigger counter
+            if (distanceToHeadLeft < headProximityThreshold &&
+                handsDistance > handDistanceThreshold &&
+                leftHandVelBefore.length === 3 &&
+                rightHandVelBefore.length === 3 &&
+                Math.abs(leftHandVelBefore[0]) < velTh &&
+                Math.abs(leftHandVelBefore[1]) < velTh &&
+                Math.abs(leftHandVelBefore[2]) < velTh) {
+                    triggerCounter += 1;
+                    console.log("PATTERN9 Trigger counter: ", triggerCounter);
+            }
+
+            if (distanceToHeadRight < headProximityThreshold &&
+                handsDistance > handDistanceThreshold &&
+                leftHandVelBefore.length === 3 &&
+                rightHandVelBefore.length === 3 &&
+                Math.abs(rightHandVelBefore[0]) < velTh &&
+                Math.abs(rightHandVelBefore[1]) < velTh &&
+                Math.abs(rightHandVelBefore[2]) < velTh) {
+                    triggerOffCounter += 1;
+                    console.log("PATTERN9 Trigger OFF counter: ", triggerCounter);
+            }
+
+            //PATTERN 12 trigger
+            if (handsDistance < handDistanceThresholdHandsOn &&
+                leftHandBefore.length === 3 &&
+                rightHandBefore.length === 3 &&
+                headBefore.length === 3 &&
+                leftHandBefore[2] > headBefore[2] &&
+                rightHandBefore[2] > headBefore[2] &&
+                (Date.now() - timeWhenLastTriggerHandsOn) > 5000) {
+                    handsOnTriggerCounter += 1;
+                    console.log("PATTERN12 Hands-on Trigger counter: ", handsOnTriggerCounter);
+            }
+        }
+
+        if (handsOnTriggerCounter >= stabilityNumTimesteps &&
+           (Date.now() - timeWhenLastTriggerHandsOn) > 5000) {
+            handsOn = !handsOn;
+            handsOnTriggerCounter = 0;
+            timeWhenLastTriggerHandsOn = Date.now();
+            // if handsOn we add hand ids to tracked bodyparts and remove feet if they are in there
+            if (handsOn) {
+                if (!trackedBodyParts.includes(bodyPartsIndex['left_hand'])) {
+                    trackedBodyParts.push(bodyPartsIndex['left_hand']);
+                }
+                if (!trackedBodyParts.includes(bodyPartsIndex['right_hand'])) {
+                    trackedBodyParts.push(bodyPartsIndex['right_hand']);
+                }
+                // remove feet if in trackedBodyParts
+                const leftFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_foot']);
+                if (leftFootIndex > -1) {
+                    trackedBodyParts.splice(leftFootIndex, 1);
+                }
+                const rightFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_foot']);
+                if (rightFootIndex > -1) {
+                    trackedBodyParts.splice(rightFootIndex, 1);
+                }
+            } else {
+               //removing hands, adding feet to be tracked
+                const leftHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_hand']);
+                if (leftHandIndex > -1) {
+                    trackedBodyParts.splice(leftHandIndex, 1);
+                }
+                const rightHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_hand']);
+                if (rightHandIndex > -1) {
+                    trackedBodyParts.splice(rightHandIndex, 1);
+                }
+                if (!trackedBodyParts.includes(bodyPartsIndex['left_foot'])) {
+                    trackedBodyParts.push(bodyPartsIndex['left_foot']);
+                }
+                if (!trackedBodyParts.includes(bodyPartsIndex['right_foot'])) {
+                    trackedBodyParts.push(bodyPartsIndex['right_foot']);
+                }
+            }
+
+            for (let i = 0; i < 20; i++) {
+                    console.log("PATTERN9 Creating swirl splats to signal activation");
+                    let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                    let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
+                    let swirlPosXstart = normX * canvas.clientWidth;
+                    let swirlPosYstart = normY * canvas.clientHeight;
+                    const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                    updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                    // Color based on direction of movement
+                    swirlPointer.color = { r: 1.0, g: 1.0, b: 1.0}; // random color
+                    // Move the splat  like a firework away from the start position randomly in 100 step
+                    let swirlPosX = swirlPosXstart;
+                    let swirlPosY = swirlPosYstart;
+                    for (let step = 0; step < 50; step++) {
+                        const offsetXMove = (Math.random() - 0.5) * 100;
+                        const offsetYMove = (Math.random() - 0.5) * 100;
+                        swirlPosX = swirlPosX + offsetXMove;
+                        swirlPosY = swirlPosY + offsetYMove;
+                        updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                        swirlPointer.moved = true; // force the splat
+                        swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                    }
+                }
+
+            // Feedback
+            console.log("PATTERN12 Hands-on mode toggled to ", handsOn);
+        }
+
+        if (triggerCounter >= stabilityNumTimesteps) {
                 headTiltColorMode = true;
                 config.bloom = true;
-            }
-            if (distanceToHeadLeft < headProximityThreshold) {
+                console.log("PATTERN9 Head tilt color mode ACTIVATED");
+                triggerCounter = 0;
+                timeWhenLastTrigger = Date.now();
+                // Showing on status
+                for (let i = 0; i < 20; i++) {
+                    console.log("PATTERN9 Creating swirl splats to signal activation");
+                    let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                    let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
+                    let swirlPosXstart = normX * canvas.clientWidth;
+                    let swirlPosYstart = normY * canvas.clientHeight;
+                    const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                    updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                    // Color based on direction of movement
+                    swirlPointer.color = { r: Math.random(), g: Math.random(), b: Math.random()}; // random color
+                    // Move the splat  like a firework away from the start position randomly in 100 step
+                    let swirlPosX = swirlPosXstart;
+                    let swirlPosY = swirlPosYstart;
+                    for (let step = 0; step < 50; step++) {
+                        const offsetXMove = (Math.random() - 0.5) * 100;
+                        const offsetYMove = (Math.random() - 0.5) * 100;
+                        swirlPosX = swirlPosX + offsetXMove;
+                        swirlPosY = swirlPosY + offsetYMove;
+                        updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                        swirlPointer.moved = true; // force the splat
+                        swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                    }
+                }
+        }
+
+        if (triggerOffCounter >= stabilityNumTimesteps) {
                 headTiltColorMode = false;
                 config.bloom = false;
-            }
+                console.log("PATTERN9 Head tilt color mode DEACTIVATED");
+                triggerOffCounter = 0;
+                timeWhenLastTrigger = Date.now();
+                for (let i = 0; i < 20; i++) {
+                    console.log("PATTERN9 Creating swirl splats to signal activation");
+                    let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
+                    let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
+                    let swirlPosXstart = normX * canvas.clientWidth;
+                    let swirlPosYstart = normY * canvas.clientHeight;
+                    const swirlPointer = pointerForId(20000 + i); // dedicated IDs for swirl splats
+                    updatePointerDownData(swirlPointer, -1, swirlPosXstart, swirlPosYstart);
+                    // Color based on direction of movement
+                    swirlPointer.color = { r: 1.0, g: 0.2, b: 0.2}; // cyan for upward
+                    // Move the splat  like a firework away from the start position randomly in 100 step
+                    let swirlPosX = swirlPosXstart;
+                    let swirlPosY = swirlPosYstart;
+                    for (let step = 0; step < 50; step++) {
+                        const offsetXMove = (Math.random() - 0.5) * 100;
+                        const offsetYMove = (Math.random() - 0.5) * 100;
+                        swirlPosX = swirlPosX + offsetXMove;
+                        swirlPosY = swirlPosY + offsetYMove;
+                        updatePointerMoveData(swirlPointer, swirlPosX, swirlPosY);
+                        swirlPointer.moved = true; // force the splat
+                        swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
+                    }
+                }
         }
 
         //PATTERN 11: Vertical hand swirl: when hand moves up or down quickly (vertical velocity component) we create swirl effect
