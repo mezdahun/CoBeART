@@ -48,19 +48,19 @@ export default {
     }
 
     void main() {
-        vec4 color = vec4(0.1, 0.2, 0.1, 1.0);
+        vec4 color = vec4(0.9, 0.8, 0.9, 1.0);
 
         // Convert vUv (0..1) to centered screen space with aspect ratio correction
         vec2 screenSpace = vUv - 0.5;
         screenSpace.x *= resolution.x / resolution.y;
 
         // Main circle
-        color += ellipseGrad(screenSpace, circle_size, grad_color, fill_color);
+        color -= ellipseGrad(screenSpace, circle_size, grad_color, fill_color);
 
-        // Three animated circles orbiting around
-        color += ellipseGrad(screenSpace + vec2(cos(time) * 0.1, sin(time + 3.14) * 0.1), circle_size, grad_color, fill_color);
-        color += ellipseGrad(screenSpace - vec2(cos(time) * 0.1, sin(time + 3.14) * 0.1), circle_size, grad_color, fill_color);
-        color += ellipseGrad(screenSpace - vec2(cos(time) * 0.1, sin(time) * 0.1), circle_size, grad_color, fill_color);
+        // Five animated circles orbiting around
+        color -= ellipseGrad(screenSpace + vec2(cos(time) * 0.12, sin(time + 3.14) * 0.12), circle_size, grad_color, fill_color);
+        color -= ellipseGrad(screenSpace - vec2(cos(time) * 0.12, sin(time + 3.14) * 0.12), circle_size, grad_color, fill_color);
+        color -= ellipseGrad(screenSpace - vec2(cos(time) * 0.12, sin(time) * 0.12), circle_size, grad_color, fill_color);
 
         color.a = 1.0;
 
