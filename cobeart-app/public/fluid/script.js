@@ -2255,7 +2255,7 @@ window.addEventListener('keydown', e => {
                         swirlPointer.splatRadius = 0.05 + Math.random() * 0.1; // small random radius
                     }
                 }
-            }
+
 
             // Feedback
             console.log("PATTERN12 Hands-on mode toggled to ", handsOn);
