@@ -329,81 +329,124 @@
         // Creating two lists of length 5 for moving average of hand distances
         var leftHandHistory = [];
         var rightHandHistory = [];
+        var lastTimeFlipped = Date.now();
 
         if (socket) {
             socket.on('frame', (payload) => {
+
+//            console.log("TRANSITION received frame payload, rigidbodies");
+
             if (!payload || !payload.rigidbodies) return;
+
+//            console.log("TRANSITION, rigidbodies:", payload.rigidbodies);
+
+
+            const lh = payload.rigidbodies.find(rb => rb.ID === bodyPartsIndex['left_hand']);
+            const rh = payload.rigidbodies.find(rb => rb.ID === bodyPartsIndex['right_hand']);
+            const dx = lh.x - rh.x;
+            const dy = lh.y - rh.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            console.log("TRANSITION, hand positions:", lh.z, rh.z, dist)
+
+//            console.log("TRANSITION, hand positions:", lh.x.toFixed(1), lh.y.toFixed(1), lh.z.toFixed(1),
+//                        rh.x.toFixed(1), rh.y.toFixed(1), rh.z.toFixed(1),
+//                        "distance:", dist.toFixed(1));
 
             // If you want the composite shader’s edge to grow from bodies,
             // keep seeding while the gate is active:
             const wantSeeds = seedGateActive;
 
-            // calculate euclidian distance between left hand and right hand
-            if (payload.rigidbodies.length >= 2) {
-                const lh = payload.rigidbodies[bodyPartsIndex['left_hand']];
-                const rh = payload.rigidbodies[bodyPartsIndex['right_hand']];
-                const dx = lh.x - rh.x;
-                const dy = lh.y - rh.y;
-                const dist = Math.sqrt(dx*dx + dy*dy);
-
-                // If hands are close together, use their midpoint as cursor and always switch to fluid
-                if (dist < 200 && lh.z < 2700 && rh.z < 2700) {
-                    console.log('Clapping hands detected, using midpoint for cursor');
-                    // Initiating transition to molten
-                    if (gateDominant !== 0) {
-                        triggerTransition(0);
-                    }
-
-                    nx = (- (lh.x + rh.x) / 2 + arena.x) / (2 * arena.x);
-                    ny = ( (lh.y + rh.y) / 2 + arena.y) / (2 * arena.y);
-
-                    if (wantSeeds) {
-                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
-                            if (seedGateActive) addSeed(nx, 1-ny);
-                        };
-                    }
+            // If hands are close together, use their midpoint as cursor and always switch to fluid
+            if (lh.z > 3000 && rh.z > 3000 && dist < 300 && Date.now() - lastTimeFlipped > 3000) {
+                console.log('Clapping hands detected, using midpoint for cursor');
+                // Initiating transition to molten
+                if (gateDominant == 2) {
+                    triggerTransition(0);
+                } else if (gateDominant == 0) {
+                    triggerTransition(2);
                 }
 
-                // if left hand above 2500 in z, switch to molten and keep cursor on left hand
-                else if (lh.z > 2700) {
-                    // Initiating transition to molten
-                    if (gateDominant !== 1) {
-                        triggerTransition(1);
-                    }
+                nx = (- (lh.x + rh.x) / 2 + arena.x) / (2 * arena.x);
+                ny = ( (lh.y + rh.y) / 2 + arena.y) / (2 * arena.y);
 
-                    nx = (-lh.x + arena.x) / (2 * arena.x);
-                    ny = ( lh.y + arena.y) / (2 * arena.y);
-
-                    if (wantSeeds) {
-                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
-                            if (seedGateActive) addSeed(nx, 1-ny);
-                        };
-                    }
+                if (wantSeeds) {
+                    if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+                        if (seedGateActive) addSeed(nx, 1-ny);
+                    };
                 }
-
-                // if right hand above 2500 in z, switch to ink and keep cursor on right hand
-                else if (rh.z > 2700) {
-                    // Initiating transition to ink
-                    if (gateDominant !== 2) {
-                        triggerTransition(2);
-                    }
-
-                    nx = (-rh.x + arena.x) / (2 * arena.x);
-                    ny = ( rh.y + arena.y) / (2 * arena.y);
-
-                    if (wantSeeds) {
-                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
-                            if (seedGateActive) addSeed(nx, 1-ny);
-                        };
-                    }
-                }
-
-                // Adding current positions to end of history and removing oldest if length exceeds 5
-                leftHandHistory.push({x: lh.x, y: lh.y, z: lh.z});
-                rightHandHistory.push({x: rh.x, y: rh.y, z: rh.z});
-                if (leftHandHistory.length > 5) leftHandHistory.shift();
-
+                lastTimeFlipped = Date.now();
             }
+
+            // calculate euclidian distance between left hand and right hand
+//            if (payload.rigidbodies.length >= 2) {
+//                const lh = payload.rigidbodies[bodyPartsIndex['left_hand']];
+//                const rh = payload.rigidbodies[bodyPartsIndex['right_hand']];
+//                const dx = lh.x - rh.x;
+//                const dy = lh.y - rh.y;
+//                const dist = Math.sqrt(dx*dx + dy*dy);
+//
+////                console.log("TRANSITION, hand positions:", lh.x.toFixed(1), lh.y.toFixed(1), lh.z.toFixed(1),
+////                            rh.x.toFixed(1), rh.y.toFixed(1), rh.z.toFixed(1),
+////                            "distance:", dist.toFixed(1));
+//
+//                // If hands are close together, use their midpoint as cursor and always switch to fluid
+//                if (dist < 200 && lh.z < 2700 && rh.z < 2700) {
+//                    console.log('Clapping hands detected, using midpoint for cursor');
+//                    // Initiating transition to molten
+//                    if (gateDominant !== 0) {
+//                        triggerTransition(1);
+//                    }
+//
+//                    nx = (- (lh.x + rh.x) / 2 + arena.x) / (2 * arena.x);
+//                    ny = ( (lh.y + rh.y) / 2 + arena.y) / (2 * arena.y);
+//
+//                    if (wantSeeds) {
+//                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+//                            if (seedGateActive) addSeed(nx, 1-ny);
+//                        };
+//                    }
+//                }
+//
+//                // if left hand above 2500 in z, switch to molten and keep cursor on left hand
+//                else if (lh.z > 2700) {
+//                    // Initiating transition to molten
+//                    if (gateDominant !== 1) {
+//                        triggerTransition(1);
+//                    }
+//
+//                    nx = (-lh.x + arena.x) / (2 * arena.x);
+//                    ny = ( lh.y + arena.y) / (2 * arena.y);
+//
+//                    if (wantSeeds) {
+//                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+//                            if (seedGateActive) addSeed(nx, 1-ny);
+//                        };
+//                    }
+//                }
+//
+//                // if right hand above 2500 in z, switch to ink and keep cursor on right hand
+//                else if (rh.z > 2700) {
+//                    // Initiating transition to ink
+//                    if (gateDominant !== 2) {
+//                        triggerTransition(2);
+//                    }
+//
+//                    nx = (-rh.x + arena.x) / (2 * arena.x);
+//                    ny = ( rh.y + arena.y) / (2 * arena.y);
+//
+//                    if (wantSeeds) {
+//                        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1){
+//                            if (seedGateActive) addSeed(nx, 1-ny);
+//                        };
+//                    }
+//                }
+//
+//                // Adding current positions to end of history and removing oldest if length exceeds 5
+//                leftHandHistory.push({x: lh.x, y: lh.y, z: lh.z});
+//                rightHandHistory.push({x: rh.x, y: rh.y, z: rh.z});
+//                if (leftHandHistory.length > 5) leftHandHistory.shift();
+//
+//            }
 
 //            for (const rb of payload.rigidbodies) {
 //

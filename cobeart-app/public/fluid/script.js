@@ -1942,9 +1942,9 @@ window.addEventListener('keydown', e => {
             const speed = m.normVel;
             // Map speed to an index in the color palette. normVel is between 0 and 1 we need the output to be between 0 and 99
             let colorIndex = Math.floor(Math.max(0, Math.min(speed, 1.0)) * 99);
-            console.log("Setting color index to ", colorIndex, " for speed ", speed);
+//            console.log("Setting color index to ", colorIndex, " for speed ", speed);
             const newColor = colorPalette[colorIndex];
-            console.log("Setting pointer color to ", newColor);
+//            console.log("Setting pointer color to ", newColor);
             pointer.color = newColor;
         }
 
@@ -1980,10 +1980,11 @@ window.addEventListener('keydown', e => {
             } else {
                 config.DENSITY_DISSIPATION = maxDensityDissipation;
             }
-            console.log("Setting DENSITY_DISSIPATION to ", config.DENSITY_DISSIPATION);
+//            console.log("Setting DENSITY_DISSIPATION to ", config.DENSITY_DISSIPATION);
         }
 
         //PATTERN 5: Unique Feet: Feet are tracked with black (at 0) to gray (at 2000) splat colors according to height
+        // If hands are turned off (and feet are followed with colors, hands are followed with black splats)
         if (handsOn) {
             if (m.id === bodyPartsIndex['left_foot'] || m.id === bodyPartsIndex['right_foot']) {
                 const posZ = m.z;
@@ -1999,6 +2000,11 @@ window.addEventListener('keydown', e => {
                     pointer.color = footColor;
                     //console.log("Setting foot color to ", footColor, " for z ", posZ);
                 }
+            }
+        } else {
+            if (m.id === bodyPartsIndex['left_hand'] || m.id === bodyPartsIndex['right_hand']) {
+                var footColor = { r: 0, g: 0, b: 0 };
+                pointer.color = footColor;
             }
         }
 
@@ -2047,12 +2053,12 @@ window.addEventListener('keydown', e => {
                     norm_centerY * canvas.clientHeight
                 ];
 
-                console.log("Fall detected! Starting fall explosion towards ", fallExplosionTargets);
+//                console.log("Fall detected! Starting fall explosion towards ", fallExplosionTargets);
             }
         }
 
         if (fallExplosionStarted && (Date.now() - fallExplosionStartTime) > fallExplosionDT) {
-            console.log("Generating fall explosion splats at coordinates: ", fallExplosionSplashCoordinates);
+//            console.log("Generating fall explosion splats at coordinates: ", fallExplosionSplashCoordinates);
 
             fallExplosionSplashCoordinates.forEach((coord, index) => {
                 const posX = scaleByPixelRatio(coord[0]);
@@ -2069,7 +2075,7 @@ window.addEventListener('keydown', e => {
                 updatePointerDownData(pointer, -1, posX, posY);
                 pointer.color = fallExplosionPalette[fallExplosionColorIndex];
                 fallExplosionColorIndex = Math.min(fallExplosionColorIndex + 1, fallExplosionPalette.length - 1);
-                console.log("Fall corner pointer DOWN: ", pointer.color);
+//                console.log("Fall corner pointer DOWN: ", pointer.color);
                 updatePointerMoveData(pointer, posX, posY);
 
                 // force the splat in case delta ends up 0
@@ -2077,7 +2083,7 @@ window.addEventListener('keydown', e => {
                 // map radius between 0.5 and 2 according to distance from target
                 pointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
 
-                console.log("Fall corner pointer: ", pointer);
+//                console.log("Fall corner pointer: ", pointer);
             });
 
             fallExplosionStartTime = Date.now();
@@ -2119,156 +2125,6 @@ window.addEventListener('keydown', e => {
             fallExplosionStarted = false;
         }
 
-//        // PATTERN 7: Jump Ghosts: When jump is detected we generate a ghost splash (black color) striking through
-//        // the center of mass of the hands in the direction of the jump
-//        const jumpZThreshold = 400; // z above which a jump is detected
-//        if (leftFootZBefore > jumpZThreshold &&
-//            rightFootZBefore > jumpZThreshold) {
-//
-//            if (!jumpGhostStarted && leftHandBefore.length === 3 && rightHandBefore.length === 3) {
-//                console.log("Jump detected initiation conditions met.");
-//                jumpGhostStarted = true;
-//                jumpGhostFinished = false;
-//                jumpGhostStartTime = Date.now();
-//
-//                // Center of mass of the hands (arena space)
-//                const centerX = (leftHandBefore[0] + rightHandBefore[0]) / 2;
-//                const centerY = (leftHandBefore[1] + rightHandBefore[1]) / 2;
-//
-//                // Direction of the jump from current foot position vs previous one
-//                let dirX = 0;
-//                let dirY = 1; // fallback
-//
-//                if (m.id === bodyPartsIndex['right_foot'] && rightFootBefore.length === 3) {
-//                    // posX, posY are the *current* arena coords of the right foot
-//                    dirX = m.x - rightFootBefore[0];
-//                    dirY = m.y - rightFootBefore[1];
-//                } else if (m.id === bodyPartsIndex['left_foot'] && leftFootBefore.length === 3) {
-//                    // same for left foot
-//                    dirX = m.x - leftFootBefore[0];
-//                    dirY = m.y - leftFootBefore[1];
-//                }
-//
-//                // Normalize
-//                let len = Math.sqrt(dirX * dirX + dirY * dirY);
-//                if (len < 1e-3) {
-//                    // If the movement vector is tiny, keep a simple default (straight up)
-//                    dirX = 0;
-//                    dirY = 1;
-//                    len = 1;
-//                }
-//                dirX /= len;
-//                dirY /= len;
-//
-//                // Find how far we can go inside the arena square [-arena_x, arena_x] x [-arena_y, arena_y]
-//                const tx = dirX !== 0 ? arena_x / Math.abs(dirX) : Infinity;
-//                const ty = dirY !== 0 ? arena_y / Math.abs(dirY) : Infinity;
-//                const tMax = Math.min(tx, ty);
-//
-//                // Farthest point "behind" the COM and the point "ahead" in jump direction
-//                const startArenaX = -dirX * tMax;
-//                const startArenaY = -dirY * tMax;
-//                const endArenaX   =  dirX * tMax;
-//                const endArenaY   =  dirY * tMax;
-//
-//                // Map arena → canvas coords using the same transform as everywhere else
-//                const norm_startX = (-startArenaX + arena_x) / (2 * arena_x);
-//                const norm_startY = ( startArenaY + arena_y) / (2 * arena_y);
-//                const norm_endX   = (-endArenaX   + arena_x) / (2 * arena_x);
-//                const norm_endY   = ( endArenaY   + arena_y) / (2 * arena_y);
-//
-//                jumpGhostSplashCoordinates = [[
-//                    norm_startX * canvas.clientWidth,
-//                    norm_startY * canvas.clientHeight
-//                ]];
-//
-//                jumpGhostTargets = [
-//                    norm_endX * canvas.clientWidth,
-//                    norm_endY * canvas.clientHeight
-//                ];
-//
-//                console.log("Jump detected! Starting jump ghost from ",
-//                    jumpGhostSplashCoordinates[0], " to ", jumpGhostTargets);
-//            }
-//        }
-//
-//        // Move and render the jump ghost
-//        if (jumpGhostStarted && !jumpGhostFinished &&
-//            (Date.now() - jumpGhostStartTime) > jumpGhostDT) {
-//
-//            console.log("Jump ghost at: ", jumpGhostSplashCoordinates);
-//
-//            jumpGhostSplashCoordinates.forEach((coord, index) => {
-//                const posXg = scaleByPixelRatio(coord[0]);
-//                const posYg = scaleByPixelRatio(coord[1]);
-//
-//                const dx = jumpGhostTargets[0] - coord[0];
-//                const dy = jumpGhostTargets[1] - coord[1];
-//                const dist = Math.sqrt(dx * dx + dy * dy);
-//                const normDist = Math.max(0, Math.min(dist / (2 * arena_x), 1.0));
-//
-//                const ghostId = 11000 + index; // dedicated ID for the ghost
-//                const ghostPointer = pointerForId(ghostId);
-//
-//                updatePointerDownData(ghostPointer, -1, posXg, posYg);
-//                // black "ghost" color
-//                ghostPointer.color = { r: 0.1, g: 0.1, b: 0.1 };
-//                updatePointerMoveData(ghostPointer, posXg, posYg);
-//
-//                // force the splat in case delta ends up 0
-//                ghostPointer.moved = true;
-//                // radius grows slightly as it approaches the center / target
-//                ghostPointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
-//
-//                console.log("Jump ghost pointer: ", ghostPointer);
-//            });
-//
-//            jumpGhostStartTime = Date.now();
-//
-//            // Move the ghost forward by a fixed distance towards the target
-//            jumpGhostSplashCoordinates = jumpGhostSplashCoordinates.map(coord => {
-//                const dx = jumpGhostTargets[0] - coord[0];
-//                const dy = jumpGhostTargets[1] - coord[1];
-//                const dist = Math.sqrt(dx * dx + dy * dy);
-//
-//                if (dist <= jumpGhostStep || dist === 0) {
-//                    jumpGhostFinished = true;
-//                    return [jumpGhostTargets[0], jumpGhostTargets[1]];
-//                }
-//
-//                const ux = dx / dist;
-//                const uy = dy / dist;
-//
-//                const newX = coord[0] + ux * jumpGhostStep;
-//                const newY = coord[1] + uy * jumpGhostStep;
-//
-//                return [newX, newY];
-//            });
-//        }
-//
-//        // Allow a new jump ghost once the current one is done and feet are back down
-//        if (jumpGhostFinished &&
-//            leftFootZBefore < jumpZThreshold &&
-//            rightFootZBefore < jumpZThreshold) {
-//            jumpGhostStarted = false;
-//        }
-
-//        //PATTERN 8: Pause Boom, Pause diffusion: of left-right hand distance smaller than 200
-//        const pauseThreshold = 200; // distance below which we pause the fluid
-//        if (leftHandBefore.length === 3 && rightHandBefore.length === 3) {
-//            const distance = Math.sqrt(
-//                (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
-//                (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
-//                (leftHandBefore[2] - rightHandBefore[2]) ** 2
-//            );
-//            if (distance < pauseThreshold) {
-//                config.PAUSED = true;
-//                //console.log("Pausing fluid due to hands closeness: ", distance);
-//            } else {
-//                config.PAUSED = false;
-//            }
-//        }
-
         //PATTERN 9: Head Tilt Color Palette Shift: changing the color palette slice according to the roll of the head
         // Head tilt color mode activation by moving right hand close to head and keeping still for 50 timesteps while
         // right-left hand distance are above threshold
@@ -2309,7 +2165,7 @@ window.addEventListener('keydown', e => {
                 Math.abs(leftHandVelBefore[1]) < velTh &&
                 Math.abs(leftHandVelBefore[2]) < velTh) {
                     triggerCounter += 1;
-                    console.log("PATTERN9 Trigger counter: ", triggerCounter);
+//                    console.log("PATTERN9 Trigger counter: ", triggerCounter);
             }
 
             if (distanceToHeadRight < headProximityThreshold &&
@@ -2320,7 +2176,7 @@ window.addEventListener('keydown', e => {
                 Math.abs(rightHandVelBefore[1]) < velTh &&
                 Math.abs(rightHandVelBefore[2]) < velTh) {
                     triggerOffCounter += 1;
-                    console.log("PATTERN9 Trigger OFF counter: ", triggerCounter);
+//                    console.log("PATTERN9 Trigger OFF counter: ", triggerCounter);
             }
 
             //PATTERN 12 trigger
@@ -2332,7 +2188,7 @@ window.addEventListener('keydown', e => {
                 rightHandBefore[2] > headBefore[2] &&
                 (Date.now() - timeWhenLastTriggerHandsOn) > 5000) {
                     handsOnTriggerCounter += 1;
-                    console.log("PATTERN12 Hands-on Trigger counter: ", handsOnTriggerCounter);
+//                    console.log("PATTERN12 Hands-on Trigger counter: ", handsOnTriggerCounter);
             }
         }
 
@@ -2342,42 +2198,42 @@ window.addEventListener('keydown', e => {
             handsOnTriggerCounter = 0;
             timeWhenLastTriggerHandsOn = Date.now();
             // if handsOn we add hand ids to tracked bodyparts and remove feet if they are in there
-            if (handsOn) {
-                if (!trackedBodyParts.includes(bodyPartsIndex['left_hand'])) {
-                    trackedBodyParts.push(bodyPartsIndex['left_hand']);
-                }
-                if (!trackedBodyParts.includes(bodyPartsIndex['right_hand'])) {
-                    trackedBodyParts.push(bodyPartsIndex['right_hand']);
-                }
-                // remove feet if in trackedBodyParts
-                const leftFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_foot']);
-                if (leftFootIndex > -1) {
-                    trackedBodyParts.splice(leftFootIndex, 1);
-                }
-                const rightFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_foot']);
-                if (rightFootIndex > -1) {
-                    trackedBodyParts.splice(rightFootIndex, 1);
-                }
-            } else {
-               //removing hands, adding feet to be tracked
-                const leftHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_hand']);
-                if (leftHandIndex > -1) {
-                    trackedBodyParts.splice(leftHandIndex, 1);
-                }
-                const rightHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_hand']);
-                if (rightHandIndex > -1) {
-                    trackedBodyParts.splice(rightHandIndex, 1);
-                }
-                if (!trackedBodyParts.includes(bodyPartsIndex['left_foot'])) {
-                    trackedBodyParts.push(bodyPartsIndex['left_foot']);
-                }
-                if (!trackedBodyParts.includes(bodyPartsIndex['right_foot'])) {
-                    trackedBodyParts.push(bodyPartsIndex['right_foot']);
-                }
-            }
+//            if (handsOn) {
+//                if (!trackedBodyParts.includes(bodyPartsIndex['left_hand'])) {
+//                    trackedBodyParts.push(bodyPartsIndex['left_hand']);
+//                }
+//                if (!trackedBodyParts.includes(bodyPartsIndex['right_hand'])) {
+//                    trackedBodyParts.push(bodyPartsIndex['right_hand']);
+//                }
+////                // remove feet if in trackedBodyParts
+////                const leftFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_foot']);
+////                if (leftFootIndex > -1) {
+////                    trackedBodyParts.splice(leftFootIndex, 1);
+////                }
+////                const rightFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_foot']);
+////                if (rightFootIndex > -1) {
+////                    trackedBodyParts.splice(rightFootIndex, 1);
+////                }
+//            } else {
+//               //removing hands, adding feet to be tracked
+//                const leftHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_hand']);
+//                if (leftHandIndex > -1) {
+//                    trackedBodyParts.splice(leftHandIndex, 1);
+//                }
+//                const rightHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_hand']);
+//                if (rightHandIndex > -1) {
+//                    trackedBodyParts.splice(rightHandIndex, 1);
+//                }
+////                if (!trackedBodyParts.includes(bodyPartsIndex['left_foot'])) {
+////                    trackedBodyParts.push(bodyPartsIndex['left_foot']);
+////                }
+////                if (!trackedBodyParts.includes(bodyPartsIndex['right_foot'])) {
+////                    trackedBodyParts.push(bodyPartsIndex['right_foot']);
+////                }
+//            }
 
             for (let i = 0; i < 20; i++) {
-                    console.log("PATTERN9 Creating swirl splats to signal activation");
+                    //console.log("PATTERN9 Creating swirl splats to signal activation");
                     let normX = (-((leftHandBefore[0] + rightHandBefore[0]) / 2) + arena_x) / (2 * arena_x);
                     let normY = (((leftHandBefore[1] + rightHandBefore[1]) / 2) + arena_y) / (2 * arena_y);
                     let swirlPosXstart = normX * canvas.clientWidth;
