@@ -57,10 +57,10 @@ export default {
         // Main circle
         color -= ellipseGrad(screenSpace, circle_size, grad_color, fill_color);
 
-        // Three animated circles orbiting around
-        color -= ellipseGrad(screenSpace + vec2(cos(time) * 0.1, sin(time + 3.14) * 0.1), circle_size, grad_color, fill_color);
-        color -= ellipseGrad(screenSpace - vec2(cos(time) * 0.1, sin(time + 3.14) * 0.1), circle_size, grad_color, fill_color);
-        color -= ellipseGrad(screenSpace - vec2(cos(time) * 0.1, sin(time) * 0.1), circle_size, grad_color, fill_color);
+        // Five animated circles orbiting around
+        color -= ellipseGrad(screenSpace + vec2(cos(time) * 0.12, sin(time + 3.14) * 0.12), circle_size, grad_color, fill_color);
+        color -= ellipseGrad(screenSpace - vec2(cos(time) * 0.12, sin(time + 3.14) * 0.12), circle_size, grad_color, fill_color);
+        color -= ellipseGrad(screenSpace - vec2(cos(time) * 0.12, sin(time) * 0.12), circle_size, grad_color, fill_color);
 
         color.a = 1.0;
 

@@ -1420,7 +1420,7 @@ function drawBackground(target, elapsedTime) {
     } else if (bgDef.name === 'Circles') {
         gl.uniform1f(currentProgram.uniforms.time, elapsedTime);
         gl.uniform2f(currentProgram.uniforms.resolution, canvas.width, canvas.height);
-        gl.uniform1f(currentProgram.uniforms.circle_size, 0.78);
+        gl.uniform1f(currentProgram.uniforms.circle_size, 0.9);
         gl.uniform3f(currentProgram.uniforms.fill_color, 0.25, 0.7, 0.25);
         gl.uniform3f(currentProgram.uniforms.grad_color, 1.0, 0.8, 0.0);
     } else if (bgDef.name === 'Zephyr') {
