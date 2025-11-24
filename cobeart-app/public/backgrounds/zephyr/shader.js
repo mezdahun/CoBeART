@@ -4,8 +4,8 @@
 // Original: https://editor.isf.video/shaders/5e7a801d7c113618206deaf7
 
 export default {
-  name: 'Zephyr',
-  fragmentShader: `
+    name: 'Zephyr',
+    fragmentShader: `
     precision highp float;
     varying vec2 vUv;
 
@@ -78,14 +78,14 @@ export default {
                     clamp((f * f) * -0.096, 0.0, 0.0));
 
         color = mix(color,
-                    color1 + cos(time / TT / 2.0),
+                    color1 * (0.5 + 0.3 * cos(time / TT / 2.0)),
                     clamp(length(q), 0.0, 1.0));
 
         color = mix(color,
-                    color2 + sin(time / TT / 2.0),
+                    color2 * (0.5 + 0.3 * sin(time / TT / 2.0)),
                     clamp(length(r.x), 0.0, 1.0));
 
-        gl_FragColor = vec4((f * f * f + 0.6 * f * f + 0.5 * f) * color, 1.0);
+        gl_FragColor = vec4((0.35 * f * f + 0.25 * f) * color, 1.0);
     }
   `
 };
