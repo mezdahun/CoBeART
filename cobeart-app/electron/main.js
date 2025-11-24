@@ -125,8 +125,8 @@ function startHttpServer() {
 // Creates and configures the main application window.
 function createWindow(shader, usePerfMode) {
   const win = new BrowserWindow({
-    width: 1050,
-    height: 1050,
+    width: 950,
+    height: 950,
     useContentSize: true,
     backgroundColor: '#000000',
     autoHideMenuBar: true,

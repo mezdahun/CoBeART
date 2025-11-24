@@ -71,7 +71,7 @@
         if (payload.audio && typeof payload.audio === 'object') {
           latestAudio = payload.audio;
         }
-        showOverlay();
+        //showOverlay();
       }
     });
 
