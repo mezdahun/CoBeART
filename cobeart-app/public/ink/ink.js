@@ -32,6 +32,32 @@ let frame = 0;
 let targetA1, targetA2;               // ping-pong for Buffer A
 let volumeNoiseTex, blueNoiseTex;     // iChannel0 / iChannel1 for our shaders
 
+// Creating animation parameters config
+let CONFIG = {
+    'blobSize': 0.05, // size of ink blobs
+    'fade': 0.5, // fade speed, if large, fades faster
+    'strength': 1.0,  // flicker and grain strength
+    'range1': 2.0,  // ink tail spread width
+    'range2': 3.0,  // ink lighting normal spread (color depth)
+    'speed': 0.1, // speed of noise evolution, spice (wiggliness/inkspread noise)
+    'scale': 0.1, // tail spread noise scale
+    'falloff': 1.0, // spread fluidity and turbulence
+    'inkBase': [0.15, 0.0, 0.0],    // base ink color
+    'ambientWeight': 0.8,  // ambient/base ink weight (how much the ink resembles base color)
+    'inkTint': [0.1, 0.0, 0.0],    // color of the ghost around ink tail
+    'background': [1.0, 1.0, 1.0], // paper/background color
+    'specularStrength': 0.5, // strength of specular highlights def: 0.5 (How shiny the ink is
+    'specularExponent': 10.0, // exponent for specular highlights def: 20.0 (how wide the lit part is in the middle)
+    'ditherStrength': 0.1, // strength of dithering effect def: 0.1, Graininess of the ink
+    'normalDivider': 472.0, // divisor for normal calculation def: 472.0  SPREAD OUT PARAMETER: smaller = more spread, don't get below 100
+    'blueNoiseScale': 1024.0, // scale for blue noise texture def: 1024.0, added blue noise for velvetiness
+    'fallBackRadius': 0.3, // fallback radius for ink blobs when no input def: 0.3
+    'fallBackSpeed': 2.0, // speed for fallback ink blob movement def: 2.0
+    'mixEdgeMin': 0.01, // minimum edge mix for ink to background def: 0.01
+    'mixEdgeMax': 0.1 // maximum edge mix for ink to background def: 0.1
+}
+
+
 init();
 animate();
 
@@ -148,9 +174,17 @@ function init() {
     uniform vec4  iMouseArray[${MAX_BODIES}];
     uniform sampler2D iChannel0; // volume noise
     uniform sampler2D iChannel1; // previous frame
+    uniform float uFade;
+    uniform float uStrength;
+    uniform float uRange1;
+    uniform float uSpeed;
+    uniform float uScale;
+    uniform float uFalloff;
+    uniform float uBlobSize;
+    uniform float uNormalDivider;
+    uniform float uFallBackRadius;
+    uniform float uFallBackSpeed;
     ${commonShader}
-    const float speed=.01; const float scale=.1; const float falloff=3.;
-    const float fade=.4;   const float strength=1.; const float range=5.;
     vec3 fbm(vec3 p){
       vec3 r=vec3(0); float a=.5;
       for(float i=0.; i<3.; ++i){
@@ -160,29 +194,30 @@ function init() {
         vec2 tOf = vec2(sin(tv+i*2.)*.03, cos(tv*1.3+i*1.5)*.025);
         uv += vec2(zOff*.5, zOff*.7) + tOf;
         r += texture2D(iChannel0, uv).xyz * a;
-        a /= falloff;
+        a /= uFalloff;
       } return r;
     }
     void main(){
       vec2 uv = (gl_FragCoord.xy - iResolution.xy/2.)/iResolution.y;
       vec2 aspect = vec2(iResolution.x/iResolution.y,1.);
-      vec3 spice = fbm(vec3(uv*scale, iTime*speed));
+      vec3 spice = fbm(vec3(uv*uScale, iTime*uSpeed));
       float paint=0.; bool any=false;
       for(int i=0;i<${MAX_BODIES};i++){
         if(iMouseArray[i].z>0.5){
           any=true;
           vec2 m=(iMouseArray[i].xy - iResolution.xy/2.)/iResolution.y;
-          vec2 luv=uv-m; paint=max(paint, trace(length(luv), .1));
+          vec2 luv=uv-m;
+          paint=max(paint, trace(length(luv), uBlobSize));
         }
       }
       if(!any){
-        float t=iTime*2.; vec2 auv=uv+vec2(cos(t),sin(t))*.3;
-        paint=trace(length(auv),.1);
+        float t=iTime*uFallBackSpeed; vec2 auv=uv+vec2(cos(t),sin(t))*uFallBackRadius;
+        paint=trace(length(auv), uBlobSize);
       }
       vec2 offset=vec2(0);
       uv = gl_FragCoord.xy / iResolution.xy;
       vec4 data = texture2D(iChannel1, uv);
-      vec3 unit = vec3(range/472./aspect,0.);
+      vec3 unit = vec3(uRange1/uNormalDivider/aspect,0.);
       vec3 normal = normalize(vec3(
           texture2D(iChannel1, uv - unit.xz).r - texture2D(iChannel1, uv + unit.xz).r,
           texture2D(iChannel1, uv - unit.zy).r - texture2D(iChannel1, uv + unit.zy).r,
@@ -190,9 +225,9 @@ function init() {
       offset -= normal.xy;
       spice.x *= 6.28*2.; spice.x += iTime;
       offset += vec2(cos(spice.x), sin(spice.x));
-      uv += strength * offset / aspect / 472.;
+      uv += uStrength * offset / aspect / uNormalDivider;
       vec4 frame = texture2D(iChannel1, uv);
-      paint = max(paint, frame.x - iTimeDelta * fade);
+      paint = max(paint, frame.x - iTimeDelta * uFade);
       gl_FragColor = vec4(clamp(paint,0.,1.));
     }
   `;
@@ -205,28 +240,47 @@ function init() {
     uniform vec4  iMouseArray[${MAX_BODIES}];
     uniform sampler2D iChannel0; // bufferA
     uniform sampler2D iChannel1; // blue noise
+    uniform float uRange2;
+    uniform vec3 uInkBase;
+    uniform float uAmbientWeight;
+    uniform vec3 uInkTint;
+    uniform vec3 uBackground;
+    uniform float uNormalDivider;
+    uniform float uBlueNoiseScale;
+    uniform float uDitherStrength;
+    uniform float uMixEdgeMax;
+    uniform float uMixEdgeMin;
+    uniform float uSpecularExponent;
+    uniform float uSpecularStrength;
     ${commonShader}
     void main(){
       vec2 uv = gl_FragCoord.xy / iResolution.xy;
-      vec3 dither = texture2D(iChannel1, gl_FragCoord.xy/1024.).rgb;
+      vec3 dither = texture2D(iChannel1, gl_FragCoord.xy/uBlueNoiseScale).rgb;
       vec4 data = texture2D(iChannel0, uv);
       float gray = data.x;
-      float range = 3.; vec2 aspect = vec2(iResolution.x/iResolution.y,1.);
-      vec3 unit = vec3(range/472./aspect,0.);
+      vec2 aspect = vec2(iResolution.x/iResolution.y,1.);
+      vec3 unit = vec3(uRange2/uNormalDivider/aspect,0.);
       vec3 normal = normalize(vec3(
         texture2D(iChannel0, uv + unit.xz).r - texture2D(iChannel0, uv - unit.xz).r,
         texture2D(iChannel0, uv - unit.zy).r - texture2D(iChannel0, uv + unit.zy).r,
         gray*gray*gray));
-      vec3 color = vec3(.3)*(1.-abs(dot(normal, vec3(0,0,1))));
+      float NdotZ = abs(dot(normal, vec3(0,0,1)));
+      vec3 lightTerm = uInkBase * (1.0 - NdotZ);        // rim/lighting contribution
+      vec3 ambient   = uInkBase * uAmbientWeight;                 // constant base so center stays colored
+      vec3 color     = ambient + lightTerm;
+
       vec3 dir = normalize(vec3(0,1,2));
-      float spec = pow(dot(normal,dir)*.5+.5,20.);
-      color += vec3(.5)*smoothstep(.2,1.,spec);
-      vec3 tint = .5+.5*cos(vec3(1,2,3)*1.+dot(normal,dir)*4.-uv.y*3.-3.);
-      color += tint * smoothstep(.15,.0,gray);
-      color -= dither.x*.1;
-      vec3 bg = vec3(1.); bg *= smoothstep(1.5,-.5,length(uv-.5));
-      color = mix(bg, clamp(color,0.,1.), smoothstep(.01,.1,gray));
-      gl_FragColor = vec4(color,1.);
+      float spec = pow(dot(normal,dir)*.5 + .5, uSpecularExponent);
+      color += vec3(uSpecularStrength) * smoothstep(.2, 1., spec);
+
+      vec3 tint = uInkTint * (0.5 + 0.5 * cos(vec3(1,2,3)*1. + dot(normal,dir)*4. - uv.y*3. - 3.));
+      color += tint * smoothstep(.15, .0, gray);
+
+      color -= dither.x * uDitherStrength;
+      vec3 bg = uBackground;
+      bg *= smoothstep(1.5, -.5, length(uv - .5));
+      color = mix(bg, clamp(color, 0., 1.), smoothstep(uMixEdgeMin,uMixEdgeMax,gray));
+      gl_FragColor = vec4(color, 1.);
     }
   `;
 
@@ -239,7 +293,17 @@ function init() {
       iMouse: { value: new THREE.Vector4() },
       iMouseArray: { value: iMouseArray },
       iChannel0: { value: null },   // volume noise
-      iChannel1: { value: null }    // previous frame (ping-pong)
+      iChannel1: { value: null },    // previous frame (ping-pong)
+      uFade: { value: CONFIG.fade },
+      uStrength: { value: CONFIG.strength },
+      uRange1: { value: CONFIG.range1 },
+      uSpeed: { value: CONFIG.speed },
+      uScale: { value: CONFIG.scale },
+      uFalloff: { value: CONFIG.falloff },
+      uBlobSize: { value: CONFIG.blobSize },
+      uNormalDivider: { value: CONFIG.normalDivider },
+      uFallBackRadius: { value: CONFIG.fallBackRadius },
+      uFallBackSpeed: { value: CONFIG.fallBackSpeed }
     },
     vertexShader: vert,
     fragmentShader: bufferA_frag
@@ -252,7 +316,21 @@ function init() {
       iMouse: { value: new THREE.Vector4() },
       iMouseArray: { value: iMouseArray },
       iChannel0: { value: null },   // bufferA
-      iChannel1: { value: null }    // blue noise
+      iChannel1: { value: null },    // blue noise
+      uRange2: { value: CONFIG.range2 },
+      uInkBase: { value: new THREE.Vector3(...CONFIG.inkBase) },
+      uAmbientWeight: { value: CONFIG.ambientWeight },
+      uInkTint: { value: new THREE.Vector3(...CONFIG.inkTint) },
+      uBackground: { value: new THREE.Vector3(...CONFIG.background) },
+      uSpecularStrength: { value: CONFIG.specularStrength },
+      uSpecularExponent: { value: CONFIG.specularExponent  },
+      uDitherStrength: { value: CONFIG.ditherStrength },
+      uNormalDivider: { value: CONFIG.normalDivider },
+      uBlueNoiseScale: { value: CONFIG.blueNoiseScale },
+      uFallBackRadius: { value: CONFIG.fallBackRadius },
+      uFallBackSpeed: { value: CONFIG.fallBackSpeed },
+      uMixEdgeMin: { value: CONFIG.mixEdgeMin },
+      uMixEdgeMax: { value: CONFIG.mixEdgeMax }
     },
     vertexShader: vert,
     fragmentShader: image_frag
