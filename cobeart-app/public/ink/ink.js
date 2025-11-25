@@ -22,6 +22,32 @@ function cleanupEntities() {
   }
 }
 
+function rebuildIMouseArray() {
+  // clear all slots
+  for (let i = 0; i < MAX_BODIES; i++) {
+    iMouseArray[i].set(0, 0, 0, 0);
+  }
+  // pack by entity.index (which equals m.id)
+  for (const id in trackedEntities) {
+    const e = trackedEntities[id];
+    if (!e) continue;
+    const idx = (e.index | 0);
+    if (idx < 0 || idx >= MAX_BODIES) continue;
+
+    // smooth motion
+    e.iMouse.x += (e.iMouseTarget.x - e.iMouse.x) * MOUSE_SMOOTHING;
+    e.iMouse.y += (e.iMouseTarget.y - e.iMouse.y) * MOUSE_SMOOTHING;
+
+    // active flag from target.z (set to 1.0 above)
+    const active = e.iMouseTarget.z > 0.5 ? 1.0 : 0.0;
+    iMouseArray[idx].set(e.iMouse.x, e.iMouse.y, active, 0.0);
+  }
+
+  // push to shaders
+  if (init && init._bufferA)   init._bufferA.uniforms.iMouseArray.value = iMouseArray;
+  if (init && init._imageMat)  init._imageMat.uniforms.iMouseArray.value = iMouseArray;
+}
+
 function syncPerEntityUniforms() {
   const img = init && init._imageMat;
   const buf = init && init._bufferA;
@@ -128,6 +154,8 @@ function updateConfig(updates = {}) {
   setUniform(bufferA, 'uNormalDivider', CONFIG.normalDivider);
   setUniform(bufferA, 'uFallBackRadius', CONFIG.fallBackRadius);
   setUniform(bufferA, 'uFallBackSpeed', CONFIG.fallBackSpeed);
+  setUniform(imageMat, 'uIdMixRadius',   CONFIG.idMixRadius);
+  setUniform(imageMat, 'uIdMixSoftness', CONFIG.idMixSoftness);
 
   // Image/material uniforms (mix of floats and vec3)
   setUniform(imageMat, 'uRange2', CONFIG.range2);
@@ -188,7 +216,9 @@ let CONFIG = {
     'fallBackRadius': 0.3, // fallback radius for ink blobs when no input def: 0.3
     'fallBackSpeed': 2.0, // speed for fallback ink blob movement def: 2.0
     'mixEdgeMin': 0.01, // minimum edge mix for ink to background def: 0.01
-    'mixEdgeMax': 0.1 // maximum edge mix for ink to background def: 0.1
+    'mixEdgeMax': 0.1, // maximum edge mix for ink to background def: 0.1
+    'idMixRadius': 0,    // 1..2 px works well
+    'idMixSoftness': 0.9 // lower = more sensitive seam blending
 }
 
 
@@ -300,153 +330,150 @@ function init() {
   `;
 
 // javascript
+// javascript
 const bufferA_frag = `
-  precision highp float;
-  uniform float iTime;
-  uniform float iTimeDelta;
-  uniform vec3  iResolution;
-  uniform vec4  iMouseArray[${MAX_BODIES}];
-  uniform sampler2D iChannel0; // volume noise
-  uniform sampler2D iChannel1; // previous frame (x=paint, y=idNorm)
-  uniform float uFade;
-  uniform float uStrength;
-  uniform float uRange1;
-  uniform float uSpeed;
-  uniform float uScale;
-  uniform float uFalloff;
-  uniform float uBlobSize;
-  uniform float uNormalDivider;
-  uniform float uFallBackRadius;
-  uniform float uFallBackSpeed;
+precision highp float;
+uniform float iTime;
+uniform float iTimeDelta;
+uniform vec3  iResolution;
+uniform vec4  iMouseArray[${MAX_BODIES}];
+uniform sampler2D iChannel0; // volume noise
+uniform sampler2D iChannel1; // previous frame (x=paint, y=idNorm)
+uniform float uFade;
+uniform float uStrength;
+uniform float uRange1;
+uniform float uSpeed;
+uniform float uScale;
+uniform float uFalloff;
+uniform float uBlobSize;
+uniform float uNormalDivider;
+uniform float uFallBackRadius;
+uniform float uFallBackSpeed;
 
-  // per-entity arrays
-  uniform float uBlobSizeArray[${MAX_BODIES}];
-  uniform float uFadeArray[${MAX_BODIES}];
-  uniform float uRange1Array[${MAX_BODIES}];
-  uniform float uScaleArray[${MAX_BODIES}];
-  uniform float uFalloffArray[${MAX_BODIES}];
-  uniform float uNormalDividerArray[${MAX_BODIES}];
+// per-entity arrays
+uniform float uBlobSizeArray[${MAX_BODIES}];
+uniform float uFadeArray[${MAX_BODIES}];
+uniform float uRange1Array[${MAX_BODIES}];
+uniform float uScaleArray[${MAX_BODIES}];
+uniform float uFalloffArray[${MAX_BODIES}];
+uniform float uNormalDividerArray[${MAX_BODIES}];
 
-  ${commonShader}
+${commonShader}
 
-  vec3 fbmSlot(vec3 p, float slotFalloff){
-    vec3 r = vec3(0.0);
-    float a = 0.5;
-    for (float i = 0.0; i < 3.0; ++i) {
-      vec2 uv = p.xy / a;
-      float zOff = (p.z + i * 0.33) * 0.1;
-      float tv = p.z * 0.25;
-      vec2 tOf = vec2(sin(tv + i * 2.0) * 0.03, cos(tv * 1.3 + i * 1.5) * 0.025);
-      uv += vec2(zOff * 0.5, zOff * 0.7) + tOf;
-      r += texture2D(iChannel0, uv).xyz * a;
-      a /= slotFalloff;
-    }
-    return r;
+vec3 fbmSlot(vec3 p, float slotFalloff){
+  vec3 r = vec3(0.0);
+  float a = 0.5;
+  for (float i = 0.0; i < 3.0; ++i) {
+    vec2 uv = p.xy / a;
+    float zOff = (p.z + i * 0.33) * 0.1;
+    float tv = p.z * 0.25;
+    vec2 tOf = vec2(sin(tv + i * 2.0) * 0.03, cos(tv * 1.3 + i * 1.5) * 0.025);
+    uv += vec2(zOff * 0.5, zOff * 0.7) + tOf;
+    r += texture2D(iChannel0, uv).xyz * a;
+    a /= slotFalloff;
   }
+  return r;
+}
 
-  int idxFromNorm(float idNorm) {
-    float idxf = idNorm * float(${MAX_BODIES - 1});
-    int idx = int(floor(idxf + 0.5));
-    if (idx < 0) idx = 0;
-    if (idx >= ${MAX_BODIES}) idx = ${MAX_BODIES - 1};
-    return idx;
-  }
+int idxFromNorm(float idNorm) {
+  float idxf = idNorm * float(${MAX_BODIES});
+  int idx = int(floor(idxf + 0.5));
+  if (idx < 0) idx = 0;
+  if (idx >= ${MAX_BODIES}) idx = ${MAX_BODIES - 1};
+  return idx;
+}
 
-  void main(){
-    vec2 uvC = (gl_FragCoord.xy - iResolution.xy * 0.5) / iResolution.y;
-    vec2 aspect = vec2(iResolution.x / iResolution.y, 1.0);
+void main(){
+  vec2 uvC = (gl_FragCoord.xy - iResolution.xy * 0.5) / iResolution.y;
+  vec2 aspect = vec2(iResolution.x / iResolution.y, 1.0);
 
-    // new paint this frame
-    float bestPaint = 0.0;
-    float bestIdNorm = 0.0;
-    bool any = false;
+  float bestPaint = 0.0;
+  float bestIdNorm = 0.0;
+  bool any = false;
 
-    for (int i = 0; i < ${MAX_BODIES}; i++) {
-      if (iMouseArray[i].z > 0.5) {
-        any = true;
-        float slotScale = uScaleArray[i];
-        float slotFalloff = uFalloffArray[i];
-        float slotBlob = uBlobSizeArray[i];
+  // Collect splats; choose strongest new splat for id
+  for (int i = 0; i < ${MAX_BODIES}; i++) {
+    if (iMouseArray[i].z > 0.5) {
+      any = true;
+      float slotScale = uScaleArray[i];
+      float slotFalloff = uFalloffArray[i];
+      float slotBlob = uBlobSizeArray[i];
 
-        vec2 m = (iMouseArray[i].xy - iResolution.xy * 0.5) / iResolution.y;
-        vec2 luv = uvC - m;
+      vec2 m = (iMouseArray[i].xy - iResolution.xy * 0.5) / iResolution.y;
+      vec2 luv = uvC - m;
 
-        float seed = float(i) * 13.17;
-        vec3 spice = fbmSlot(vec3(luv * (slotScale * 0.8) + seed, iTime * uSpeed + seed), slotFalloff);
-        float jitterRadius = clamp(slotBlob * 0.06, 0.005, 0.1);
-        vec2 slotOffset = vec2(cos(spice.x * 6.283 + seed), sin(spice.x * 6.283 + seed)) * jitterRadius;
+      float seed = float(i) * 13.17;
+      vec3 spice = fbmSlot(vec3(luv * (slotScale * 0.8) + seed, iTime * uSpeed + seed), slotFalloff);
+      float jitterRadius = clamp(slotBlob * 0.06, 0.005, 0.1);
+      vec2 slotOffset = vec2(cos(spice.x * 6.283 + seed), sin(spice.x * 6.283 + seed)) * jitterRadius;
 
-        float slotPaint = trace(length(luv + slotOffset), slotBlob);
-        if (slotPaint > bestPaint) {
-          bestPaint = slotPaint;
-          bestIdNorm = float(i) / float(${MAX_BODIES - 1});
-        }
+      float slotPaint = trace(length(luv + slotOffset), slotBlob);
+      if (slotPaint > bestPaint) {
+        bestPaint = slotPaint;
+        bestIdNorm = (float(i) + 0.5) / float(${MAX_BODIES});
       }
     }
-
-    // optional fallback motion when no active bodies (keeps buffer alive)
-    if (!any) {
-      float t = iTime * uFallBackSpeed;
-      vec2 fbPos = vec2(cos(t) * uFallBackRadius, sin(t * 1.3) * uFallBackRadius);
-      vec2 luv = uvC - fbPos;
-      vec3 spice = fbmSlot(vec3(luv * (uScale * 0.8), iTime * uSpeed), uFalloff);
-      vec2 fbOffset = vec2(cos(spice.x * 6.283), sin(spice.x * 6.283)) * (uBlobSize * 0.03);
-      bestPaint = max(bestPaint, trace(length(luv + fbOffset), uFallBackRadius));
-      bestIdNorm = 0.0;
-    }
-
-    // --- per-pixel advection like original, with per-entity ownership preserved ---
-    vec2 uv = gl_FragCoord.xy / iResolution.xy;
-
-    // read local center to decide whether we have ink here
-    vec4 centerSample = texture2D(iChannel1, uv);
-    float center = centerSample.x;
-    float centerIdNorm = centerSample.y;
-    int centerIdx = idxFromNorm(centerIdNorm);
-    float hasInk = step(1e-5, center);
-
-    // use global CONFIG where there is no ink; per-entity where there is ink
-    float useRange1     = mix(uRange1,     uRange1Array[centerIdx],     hasInk);
-    float useNormalDiv  = mix(uNormalDivider, uNormalDividerArray[centerIdx], hasInk);
-    float useScale      = mix(uScale,      uScaleArray[centerIdx],      hasInk);
-    float useFalloff    = mix(uFalloff,    uFalloffArray[centerIdx],    hasInk);
-
-    // normal from previous frame (match original z term as center*center)
-    vec3 unit = vec3(useRange1 / useNormalDiv / aspect, 0.0);
-    float l = texture2D(iChannel1, uv - unit.xz).x;
-    float r = texture2D(iChannel1, uv + unit.xz).x;
-    float u = texture2D(iChannel1, uv - unit.zy).x;
-    float d = texture2D(iChannel1, uv + unit.zy).x;
-    vec3 normal = normalize(vec3(l - r, u - d, center * center) + 0.001);
-
-    // original-strength spice contribution (amplitude 1)
-    vec2 offset = -normal.xy;
-    vec3 spice = fbmSlot(vec3(uvC * useScale, iTime * uSpeed), useFalloff);
-    float ang = spice.x * 6.283 * 2.0 + iTime;
-    offset += vec2(cos(ang), sin(ang));
-
-    // advect
-    vec2 advUV = uv + uStrength * offset / aspect / useNormalDiv;
-    vec4 advSample = texture2D(iChannel1, advUV);
-
-    // per-entity decay from advected id
-    float prevIdNorm = advSample.y;
-    int prevIdx = idxFromNorm(prevIdNorm);
-    float prevFade = uFadeArray[prevIdx];
-    float prevDecayed = advSample.x - iTimeDelta * prevFade;
-
-    // keep owner id of the winning source (previous vs. fresh)
-    float finalPaint, finalIdNorm;
-    if (prevDecayed > bestPaint) {
-      finalPaint = prevDecayed;
-      finalIdNorm = prevIdNorm;
-    } else {
-      finalPaint = bestPaint;
-      finalIdNorm = bestIdNorm;
-    }
-
-    gl_FragColor = vec4(clamp(finalPaint, 0.0, 1.0), finalIdNorm, 0.0, 1.0);
   }
+
+//  // Fallback motion
+//  if (!any) {
+//    float t = iTime * uFallBackSpeed;
+//    vec2 fbPos = vec2(cos(t) * uFallBackRadius, sin(t * 1.3) * uFallBackRadius);
+//    vec2 luv = uvC - fbPos;
+//    vec3 spice = fbmSlot(vec3(luv * (uScale * 0.8), iTime * uSpeed), uFalloff);
+//    vec2 fbOffset = vec2(cos(spice.x * 6.283), sin(spice.x * 6.283)) * (uBlobSize * 0.03);
+//    bestPaint = max(bestPaint, trace(length(luv + fbOffset), uFallBackRadius));
+//    bestIdNorm = 0.5 / float(${MAX_BODIES});
+//  }
+
+  // Previous frame advection
+  vec2 uv = gl_FragCoord.xy / iResolution.xy;
+  vec4 centerSample = texture2D(iChannel1, uv);
+  float center = centerSample.x;
+  float centerIdNorm = centerSample.y;
+  int centerIdx = idxFromNorm(centerIdNorm);
+  float hasInk = step(1e-5, center);
+
+  float useRange1     = mix(uRange1,        uRange1Array[centerIdx],        hasInk);
+  float useNormalDiv  = mix(uNormalDivider, uNormalDividerArray[centerIdx], hasInk);
+  float useScale      = mix(uScale,         uScaleArray[centerIdx],         hasInk);
+  float useFalloff    = mix(uFalloff,       uFalloffArray[centerIdx],       hasInk);
+
+  vec3 unit = vec3(useRange1 / useNormalDiv / aspect, 0.0);
+  float l = texture2D(iChannel1, uv - unit.xz).x;
+  float r = texture2D(iChannel1, uv + unit.xz).x;
+  float u = texture2D(iChannel1, uv - unit.zy).x;
+  float d = texture2D(iChannel1, uv + unit.zy).x;
+  vec3 normal = normalize(vec3(l - r, u - d, center * center) + 0.001);
+
+  vec2 offset = -normal.xy;
+  vec3 spiceAdv = fbmSlot(vec3(uvC * useScale, iTime * uSpeed), useFalloff);
+  float ang = spiceAdv.x * 6.283 * 2.0 + iTime;
+  offset += vec2(cos(ang), sin(ang));
+
+  vec2 advUV = uv + uStrength * offset / aspect / useNormalDiv;
+  vec4 advSample = texture2D(iChannel1, advUV);
+  float prevIdNorm = advSample.y;
+  int prevIdx = idxFromNorm(prevIdNorm);
+  float prevFade = uFadeArray[prevIdx];
+  float prevDecayed = advSample.x - iTimeDelta * prevFade;
+
+  // Override logic: if any splat touched this pixel, keep max paint but prefer splat id when it wins
+  float splatMask = step(0.0, bestPaint);
+  float finalPaint;
+  float finalIdNorm;
+  if (splatMask > 0.0) {
+    float combined = max(prevDecayed, bestPaint);
+    bool splatWins = (bestPaint >= prevDecayed);
+    finalPaint = combined;
+    finalIdNorm = splatWins ? bestIdNorm : prevIdNorm;
+  } else {
+    finalPaint = prevDecayed;
+    finalIdNorm = prevIdNorm;
+  }
+
+  gl_FragColor = vec4(clamp(finalPaint, 0.0, 1.0), finalIdNorm, 0.0, 1.0);
+}
 `;
 
 // image: unchanged logic; reads paint in .x, id in .y for per-entity shading.
@@ -470,36 +497,55 @@ const image_frag = `
   uniform float uSpecularExponent;
   uniform float uSpecularStrength;
 
-  uniform vec3 uInkBaseArray[${MAX_BODIES}];
-  uniform vec3 uInkTintArray[${MAX_BODIES}];
+  // per-entity arrays
+  uniform vec3  uInkBaseArray[${MAX_BODIES}];
+  uniform vec3  uInkTintArray[${MAX_BODIES}];
   uniform float uRange2Array[${MAX_BODIES}];
   uniform float uSpecularStrengthArray[${MAX_BODIES}];
   uniform float uNormalDividerArray[${MAX_BODIES}];
 
+  // new: seam smoothing controls
+  uniform float uIdMixRadius;   // in pixels (e.g., 1.0 - 2.0)
+  uniform float uIdMixSoftness; // 0..1 threshold for turning on blend
+
   ${commonShader}
   void main(){
     vec2 uv = gl_FragCoord.xy / iResolution.xy;
+    vec2 texel = 1.0 / iResolution.xy;
+
+    // gather 5 taps of bufferA for a soft id average at seams
+    vec4 sC = texture2D(iChannel0, uv);
+    vec4 sR = texture2D(iChannel0, uv + texel * vec2(+uIdMixRadius, 0.0));
+    vec4 sL = texture2D(iChannel0, uv + texel * vec2(-uIdMixRadius, 0.0));
+    vec4 sU = texture2D(iChannel0, uv + texel * vec2(0.0, +uIdMixRadius));
+    vec4 sD = texture2D(iChannel0, uv + texel * vec2(0.0, -uIdMixRadius));
+
+    float gray = sC.x;
+
+    // fractional owner id from neighborhood
+    float idC   = sC.y;
+    float idAvg = (idC + sR.y + sL.y + sU.y + sD.y) / 5.0;
+
+    // how strong the seam is around this pixel
+    float idDiff = max(max(abs(idC - sR.y), abs(idC - sL.y)),
+                       max(abs(idC - sU.y), abs(idC - sD.y)));
+    float wBlend = smoothstep(0.0, max(1e-6, uIdMixSoftness), idDiff);
+
+    // blend between two nearest entity slots using averaged id
+    float idxfAvg = clamp(idAvg * float(${MAX_BODIES - 1}), 0.0, float(${MAX_BODIES - 1}));
+    int   i0 = int(floor(idxfAvg));
+    int   i1 = min(i0 + 1, ${MAX_BODIES - 1});
+    float t  = fract(idxfAvg) * wBlend;
+
+    // pick and blend per-entity params
+    vec3  inkBasePicked   = mix(uInkBaseArray[i0],            uInkBaseArray[i1],            t);
+    vec3  inkTintPicked   = mix(uInkTintArray[i0],            uInkTintArray[i1],            t);
+    float pickedRange2    = mix(uRange2Array[i0],             uRange2Array[i1],             t);
+    float pickedSpec      = mix(uSpecularStrengthArray[i0],   uSpecularStrengthArray[i1],   t);
+    float pickedNormalDiv = mix(uNormalDividerArray[i0],      uNormalDividerArray[i1],      t);
+
+    // shading (unchanged, but uses blended params)
     vec3 dither = texture2D(iChannel1, gl_FragCoord.xy/uBlueNoiseScale).rgb;
-    vec4 data = texture2D(iChannel0, uv);
-    float gray = data.x;
-
-    float idNorm = data.y;
-    float idxf = idNorm * float(${MAX_BODIES - 1});
-    int idx = int(floor(idxf + 0.5));
-
-    vec3 inkBasePicked = uInkBase;
-    vec3 inkTintPicked = uInkTint;
-    float pickedRange2 = uRange2;
-    float pickedSpec = uSpecularStrength;
-    float pickedNormalDiv = uNormalDivider;
-    if (idx >= 0 && idx < ${MAX_BODIES}) {
-      inkBasePicked = uInkBaseArray[idx];
-      inkTintPicked = uInkTintArray[idx];
-      pickedRange2 = uRange2Array[idx];
-      pickedSpec = uSpecularStrengthArray[idx];
-      pickedNormalDiv = uNormalDividerArray[idx];
-    }
-
     vec2 aspect = vec2(iResolution.x/iResolution.y, 1.0);
     vec3 unit = vec3(pickedRange2/pickedNormalDiv/aspect, 0.0);
     vec3 normal = normalize(vec3(
@@ -558,38 +604,39 @@ const image_frag = `
     fragmentShader: bufferA_frag
   });
 
-  const imageMat = new THREE.ShaderMaterial({
-    uniforms: {
-      iResolution: { value: iResolution },
-      iTime: { value: 0 },
-      iMouse: { value: new THREE.Vector4() },
-      iMouseArray: { value: iMouseArray },
-      iChannel0: { value: null },   // bufferA
-      iChannel1: { value: null },    // blue noise
-      uRange2: { value: CONFIG.range2 },
-      uInkBase: { value: new THREE.Vector3(...CONFIG.inkBase) },
-      uAmbientWeight: { value: CONFIG.ambientWeight },
-      uInkTint: { value: new THREE.Vector3(...CONFIG.inkTint) },
-      uBackground: { value: new THREE.Vector3(...CONFIG.background) },
-      uSpecularStrength: { value: CONFIG.specularStrength },
-      uSpecularExponent: { value: CONFIG.specularExponent  },
-      uDitherStrength: { value: CONFIG.ditherStrength },
-      uNormalDivider: { value: CONFIG.normalDivider },
-      uBlueNoiseScale: { value: CONFIG.blueNoiseScale },
-      uFallBackRadius: { value: CONFIG.fallBackRadius },
-      uFallBackSpeed: { value: CONFIG.fallBackSpeed },
-      uMixEdgeMin: { value: CONFIG.mixEdgeMin },
-      uMixEdgeMax: { value: CONFIG.mixEdgeMax },
-      uInkBaseArray: { value: Array.from({length: MAX_BODIES}, () => new THREE.Vector3(...CONFIG.inkBase)) },
-      uInkTintArray: { value: Array.from({length: MAX_BODIES}, () => new THREE.Vector3(...CONFIG.inkTint)) },
-      uBlobSizeArray: { value: new Float32Array(MAX_BODIES).fill(CONFIG.blobSize) },
-      uRange2Array: { value: new Float32Array(MAX_BODIES).fill(CONFIG.range2) },
-      uSpecularStrengthArray: { value: new Float32Array(MAX_BODIES).fill(CONFIG.specularStrength) },
-      uNormalDividerArray: { value: new Float32Array(MAX_BODIES).fill(CONFIG.normalDivider) }
-    },
-    vertexShader: vert,
-    fragmentShader: image_frag
-  });
+    const imageMat = new THREE.ShaderMaterial({
+      uniforms: {
+        iResolution: { value: iResolution },
+        iTime: { value: 0 },
+        iMouse: { value: new THREE.Vector4() },
+        iMouseArray: { value: iMouseArray },
+        iChannel0: { value: null },
+        iChannel1: { value: null },
+        uRange2: { value: CONFIG.range2 },
+        uInkBase: { value: new THREE.Vector3(...CONFIG.inkBase) },
+        uAmbientWeight: { value: CONFIG.ambientWeight },
+        uInkTint: { value: new THREE.Vector3(...CONFIG.inkTint) },
+        uBackground: { value: new THREE.Vector3(...CONFIG.background) },
+        uSpecularStrength: { value: CONFIG.specularStrength },
+        uSpecularExponent: { value: CONFIG.specularExponent },
+        uDitherStrength: { value: CONFIG.ditherStrength },
+        uNormalDivider: { value: CONFIG.normalDivider },
+        uBlueNoiseScale: { value: CONFIG.blueNoiseScale },
+        uFallBackRadius: { value: CONFIG.fallBackRadius },
+        uFallBackSpeed: { value: CONFIG.fallBackSpeed },
+        uMixEdgeMin: { value: CONFIG.mixEdgeMin },
+        uMixEdgeMax: { value: CONFIG.mixEdgeMax },
+        uInkBaseArray: { value: Array.from({length: MAX_BODIES}, () => new THREE.Vector3(...CONFIG.inkBase)) },
+        uInkTintArray: { value: Array.from({length: MAX_BODIES}, () => new THREE.Vector3(...CONFIG.inkTint)) },
+        uRange2Array: { value: new Float32Array(MAX_BODIES).fill(CONFIG.range2) },
+        uSpecularStrengthArray: { value: new Float32Array(MAX_BODIES).fill(CONFIG.specularStrength) },
+        uNormalDividerArray: { value: new Float32Array(MAX_BODIES).fill(CONFIG.normalDivider) },
+        uIdMixRadius: { value: CONFIG.idMixRadius },
+        uIdMixSoftness: { value: CONFIG.idMixSoftness }
+      },
+      vertexShader: vert,
+      fragmentShader: image_frag
+    });
 
   // We’ll render BufferA on a throwaway mesh scene, then final image to screen
   function renderFullScreen(mat, target) {
@@ -651,18 +698,14 @@ const image_frag = `
 
     // ensure tracked entry exists and allocate a free index (1..MAX_BODIES-1)
     if (!trackedEntities[m.id]) {
-      const used = new Set(Object.values(trackedEntities).map(ent => ent.index));
-      let newIndex = -1;
-      for (let i = 1; i < MAX_BODIES; i++) {
-        if (!used.has(i)) { newIndex = i; break; }
-      }
-      if (newIndex === -1) {
-        console.warn('Max number of tracked bodies reached.');
+      // use incoming id directly as shader index (0-based)
+      if (m.id < 0 || m.id >= MAX_BODIES) {
+        console.warn('Incoming id out of range:', m.id);
         return;
       }
       trackedEntities[m.id] = {
         id: m.id,
-        index: newIndex,
+        index: m.id, // critical: matches iMouseArray & shader loop index
         iMouse: new THREE.Vector4(0, 0, 0, 0),
         iMouseTarget: new THREE.Vector4(0, 0, 0, 0),
         lastSeen: Date.now(),
@@ -708,15 +751,15 @@ const image_frag = `
     const normX = Math.abs(m.x / 3000); // arena x range assumed -3000..+3000
     entity.config.blobSize = 0.02 + normX * 0.2; // blob size 0.02..0.22
 
+    //console.log(`Entity ${m.id} at (${m.x.toFixed(1)}, ${m.y.toFixed(1)}) -> screen (${screenX.toFixed(1)}, ${screenY.toFixed(1)}), blobSize: ${entity.config.blobSize.toFixed(3)}`);
     // Pattern 2: per-entity tint using trackedEntities.config (scale/mutate entity config here)
-    if (bodyPartsIndex && m.id === bodyPartsIndex['right_hand']) {
-      entity.config.inkBase = [Math.abs(m.x / 3000), 0.5, 0.0]; // Orange base for right hand
-      entity.config.inkTint = [Math.abs(m.x / 3000), 0.0, 0.0]; // Red tint for right hand
-    } else if (bodyPartsIndex && m.id === bodyPartsIndex['left_hand']) {
-      entity.config.inkBase = [0.0, 0.0, Math.abs(m.y / 3000)]; // Blue base for left hand
-      entity.config.inkTint = [0.0, 0.0, Math.abs(m.y / 3000)]; // Blue tint for left hand
+    if (m.id === bodyPartsIndex['left_hand']) {
+      entity.config.inkBase = [0.0, (1.0-normX)*0.1, 0.0];   // pure red
+//      entity.config.inkTint = [0.0, (1.0-normX)*0.2, 0.0];
+    } else if (m.id === bodyPartsIndex['right_hand']) {
+      entity.config.inkBase = [normX*0.2, 0.0, 0.0];   // pure green
+//      entity.config.inkTint = [normX*0.5, 0.0, 0.0];
     }
-
     // push per-entity values into shader uniforms
     syncPerEntityUniforms();
   });
@@ -737,6 +780,7 @@ function onResize() {
 }
 
 function animate() {
+  //rebuildIMouseArray();
   requestAnimationFrame(animate);
 
   cleanupEntities();
@@ -748,10 +792,11 @@ function animate() {
   lastTime = now;
 
   // smooth local mouse (slot 0)
-  iMouseArray[0].x += (iMouseTarget.x - iMouseArray[0].x) * MOUSE_SMOOTHING;
-  iMouseArray[0].y += (iMouseTarget.y - iMouseArray[0].y) * MOUSE_SMOOTHING;
-  iMouseArray[0].z = iMouseTarget.z;
-  iMouseArray[0].w = iMouseTarget.w;
+  const MOUSE_SLOT = MAX_BODIES - 1;
+  iMouseArray[MOUSE_SLOT].x += (iMouseTarget.x - iMouseArray[MOUSE_SLOT].x) * MOUSE_SMOOTHING;
+  iMouseArray[MOUSE_SLOT].y += (iMouseTarget.y - iMouseArray[MOUSE_SLOT].y) * MOUSE_SMOOTHING;
+  iMouseArray[MOUSE_SLOT].z = iMouseTarget.z;
+  iMouseArray[MOUSE_SLOT].w = iMouseTarget.w;
 
   // smooth tracked entities into their slots
   for (const id in trackedEntities) {
