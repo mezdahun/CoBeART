@@ -1743,7 +1743,7 @@ window.addEventListener('keydown', e => {
     let headBefore = [];
 
     //PRODUCTION MASTER PARAMS
-    let worldName = "Circles"  // Zephyr or Circles with different moves enabled and different color palettes
+    let worldName = "Zephyr"  // Zephyr or Circles with different moves enabled and different color palettes
 
     // Showing background for world
     if (worldName === "Zephyr") {
@@ -2395,7 +2395,7 @@ window.addEventListener('keydown', e => {
         const microsplatHandDistanceThreshold = 1000; // distance below which microsplat mode is activated
         const microsplatHandDepthThreshold = 500; // depth below which microsplat mode is activated
         const microsplatVelocityThreshold = 2500; // vertical velocity above which microsplat mode is toggled
-        if (leftHandBefore.length === 3 && rightHandBefore.length === 3 && leftHandVelBefore.length === 3 && rightHandVelBefore.length === 3) {
+        if (worldName!=='Circles' && leftHandBefore.length === 3 && rightHandBefore.length === 3 && leftHandVelBefore.length === 3 && rightHandVelBefore.length === 3) {
             const distanceBetweenHands = Math.sqrt(
                 (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
                 (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
@@ -2461,7 +2461,6 @@ window.addEventListener('keydown', e => {
                     }
                 }
             }
-
         }
 
         let activatedSwirlVelocityThreshold = 1600
@@ -2484,8 +2483,24 @@ window.addEventListener('keydown', e => {
                         // Color based on direction of movement
                         if (vz > 0) {
                             swirlPointer.color = { r: 0.0, g: 1.0, b: 1.0 }; // cyan for upward
+                            if (worldName === "Zephyr") {
+                                //choose a variation of gray
+                                let intensity = 0.1 + Math.random() * 0.5;
+                                swirlPointer.color = { r: intensity, g: intensity, b: intensity};
+                            }
                         } else {
                             swirlPointer.color = { r: 1.0, g: 0.0, b: 1.0 }; // magenta for downward
+                            if (worldName === "Zephyr") {
+                                //choose a variation of yellow like thunders
+                                let orange = {r: 0.5, g: 0.25, b: 0.0};
+                                let brown = {r: 0.3, g: 0.15, b: 0.0};
+                                let aquamarine = {r: 0.1, g: 0.25, b: 0.15};
+                                let babyblue = {r: 0.2, g: 0.3, b: 0.5};
+                                let golden = {r: 0.48, g: 0.435, b: 0.35};
+                                let silver = {r: 0.375, g: 0.375, b: 0.375};
+                                let allColors = [orange, brown, aquamarine, babyblue, golden, silver];
+                                swirlPointer.color = allColors[Math.floor(Math.random() * allColors.length)];
+                            }
                         }
                         // Move the splat  like a firework away from the start position randomly in 100 step
                         let swirlPosX = swirlPosXstart;
