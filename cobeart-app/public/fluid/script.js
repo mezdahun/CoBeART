@@ -1742,27 +1742,67 @@ window.addEventListener('keydown', e => {
     let rightHandVelBefore = [];
     let headBefore = [];
 
+    //PRODUCTION MASTER PARAMS
+    let worldName = "Circles"  // Zephyr or Circles with different moves enabled and different color palettes
+
+    // Showing background for world
+    if (worldName === "Zephyr") {
+        config.SHOW_BACKGROUND = true;
+        config.BACKGROUND_INDEX = 2; // Zephyr
+    } else if (worldName === "Circles") {
+        config.SHOW_BACKGROUND = true;
+        config.BACKGROUND_INDEX = 1; // Circles
+    }
+
+
     // Defining an RGB color palette of yellow-orange-red-purple of 300 colors
     let colorPalette = [];
     let defaultColorPalette = [];
     let minHue = 60; // yellow
     let maxHue = -60; // purple
+    if (worldName === "Zddedephyr") {
+      let yellow = HSVtoRGB(60 / 360, 1.0, 1.0);
+      let blue = HSVtoRGB(240 / 360, 1.0, 1.0);
+      let beige = HSVtoRGB(30 / 360, 0.3, 1.0);
+      let white = HSVtoRGB(0 / 360, 0.0, 1.0);
+      let cyan = HSVtoRGB(180 / 360, 1.0, 1.0);
+      let turquise = HSVtoRGB(174 / 360, 0.72, 1.0);
+
+      let baseColors = [yellow, blue, beige, cyan, turquise];
+      let segments = baseColors.length - 1;
+
+      for (let s = 0; s < segments; s++) {
+        let startColor = baseColors[s];
+        let endColor = baseColors[s + 1];
+
+        for (let i = 0; i < 20; i++) {
+          let t = i / 19;
+          let r = startColor[0] + t * (endColor[0] - startColor[0]);
+          let g = startColor[1] + t * (endColor[1] - startColor[1]);
+          let b = startColor[2] + t * (endColor[2] - startColor[2]);
+          colorPalette.push({ 'r': r, 'g': g, 'b': b } );
+          defaultColorPalette.push({ 'r': r, 'g': g, 'b': b } );
+        }
+      }
+    } else {
     for (let i = 0; i <= 99; i++) {
         const hue = minHue - (i / 99) * (minHue - maxHue);
         const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
+        console.log("Generated color RGB: ", rgb);
         colorPalette.push(rgb);
         defaultColorPalette.push(rgb);
+    }
     }
 
 
     //PATTERN 7 params
-    let fallExplosionPalette = []; // from white to blue color
+    let fallExplosionPalette = [];
     for (let i = 0; i <= 99; i++) {
-        const hue = 240; // blue hue
-        const saturation = i / 99; // from 0 to 1
-        const value = 3.0; // full brightness
-        const rgb = HSVtoRGB(hue / 360, saturation, value);
-        fallExplosionPalette.push(rgb);
+      const hue = 240;              // blue
+      const saturation = i / 99;
+      const value = 3.0;            // if this looked good for you, keep it
+      const rgb = HSVtoRGB(hue / 360, saturation, value);
+      fallExplosionPalette.push(rgb);
     }
 
     let fallExplosionStarted = false;
@@ -1869,7 +1909,7 @@ window.addEventListener('keydown', e => {
         const posZ = m.z;
         const maxBloomZ = 1500; // z at which bloom is maximum
         const maxBloomValue = 0.15; // maximum bloom intensity
-        const lowerZThreshold = 200; // z below which no bloom is applied and from which smooth change of bloom is applied
+        const lowerZThreshold = 1000; // z below which no bloom is applied and from which smooth change of bloom is applied
         if ((m.id === bodyPartsIndex['right_foot'] && posZ > leftFootZBefore) ||
             (m.id === bodyPartsIndex['left_foot'] && posZ > rightFootZBefore)
         ) {
@@ -2061,8 +2101,14 @@ window.addEventListener('keydown', e => {
 //            console.log("Generating fall explosion splats at coordinates: ", fallExplosionSplashCoordinates);
 
             fallExplosionSplashCoordinates.forEach((coord, index) => {
-                const posX = scaleByPixelRatio(coord[0]);
-                const posY = scaleByPixelRatio(coord[1]);
+                let posX, posY;
+                if (worldName === "Zephyr") {
+                    posX = scaleByPixelRatio(coord[0]) + (Math.random() - 0.5) * 70; // small random offset
+                    posY = scaleByPixelRatio(coord[1]) + (Math.random() - 0.5) * 70;
+                } else {
+                    posX = scaleByPixelRatio(coord[0]);
+                    posY = scaleByPixelRatio(coord[1]);
+                }
 
                 const dx = fallExplosionTargets[0] - coord[0];
                 const dy = fallExplosionTargets[1] - coord[1];
@@ -2073,7 +2119,15 @@ window.addEventListener('keydown', e => {
                 const pointer = pointerForId(cornerId);
 
                 updatePointerDownData(pointer, -1, posX, posY);
-                pointer.color = fallExplosionPalette[fallExplosionColorIndex];
+                // emerald green
+                if (worldName === "Zephyr") {
+                    // subtle blue/cyan
+                    pointer.color = { r: 0, g: 0.01, b: 0.016 };
+                } else {
+                    pointer.color = fallExplosionPalette[fallExplosionColorIndex];
+                }
+
+                //pointer.color = fallExplosionPalette[fallExplosionColorIndex];
                 fallExplosionColorIndex = Math.min(fallExplosionColorIndex + 1, fallExplosionPalette.length - 1);
 //                console.log("Fall corner pointer DOWN: ", pointer.color);
                 updatePointerMoveData(pointer, posX, posY);
@@ -2081,7 +2135,12 @@ window.addEventListener('keydown', e => {
                 // force the splat in case delta ends up 0
                 pointer.moved = true;
                 // map radius between 0.5 and 2 according to distance from target
-                pointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
+                if (worldName === "Zephyr") {
+                    pointer.splatRadius = 2.5 + normDist * (2.0 - 0.5);
+                } else {
+                    pointer.splatRadius = 0.5 + (normDist) * (2.0 - 0.5);
+                }
+                //pointer.splatRadius = 0.5 + normDist * (2.0 - 0.5);
 
 //                console.log("Fall corner pointer: ", pointer);
             });
@@ -2128,9 +2187,9 @@ window.addEventListener('keydown', e => {
         //PATTERN 9: Head Tilt Color Palette Shift: changing the color palette slice according to the roll of the head
         // Head tilt color mode activation by moving right hand close to head and keeping still for 50 timesteps while
         // right-left hand distance are above threshold
-        const headProximityThreshold = 400; // distance below which head tilt color mode is activated
+        const headProximityThreshold = 300; // distance below which head tilt color mode is activated
         const handDistanceThreshold = 1500; // distance above which head tilt color mode can be activated
-        const handDistanceThresholdHandsOn = 400; // distance below which hands detected to be kept together
+        const handDistanceThresholdHandsOn = 300; // distance below which hands detected to be kept together
         const velTh = 150; // maximum velocity to consider hand as still
         if (leftHandBefore.length === 3 && rightHandBefore.length === 3 &&
             (Date.now() - timeWhenLastTrigger) > 5000) {
