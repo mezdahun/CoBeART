@@ -196,8 +196,8 @@ let volumeNoiseTex, blueNoiseTex;     // iChannel0 / iChannel1 for our shaders
 
 // Creating animation parameters config
 let CONFIG = {
-    'blobSize': 0.05, // size of ink blobs
-    'fade': 0.5, // fade speed, if large, fades faster
+    'blobSize': 0.015, // size of ink blobs
+    'fade': 0.55, // fade speed, if large, fades faster
     'strength': 1.0,  // flicker and grain strength
     'range1': 5.0,  // ink tail spread width
     'range2': 3.0,  // ink lighting normal spread (color depth)
@@ -206,7 +206,7 @@ let CONFIG = {
     'falloff': 1.0, // spread fluidity and turbulence
     'inkBase': [0.15, 0.0, 0.0],    // base ink color
     'ambientWeight': 0.8,  // ambient/base ink weight (how much the ink resembles base color)
-    'inkTint': [0.1, 0.0, 0.0],    // color of the ghost around ink tail
+    'inkTint': [3.0, 3.0, 3.0],    // color of the ghost around ink tail
     'background': [1.0, 1.0, 1.0], // paper/background color
     'specularStrength': 0.5, // strength of specular highlights def: 0.5 (How shiny the ink is
     'specularExponent': 10.0, // exponent for specular highlights def: 20.0 (how wide the lit part is in the middle)
@@ -215,8 +215,8 @@ let CONFIG = {
     'blueNoiseScale': 1024.0, // scale for blue noise texture def: 1024.0, added blue noise for velvetiness
     'fallBackRadius': 0.3, // fallback radius for ink blobs when no input def: 0.3
     'fallBackSpeed': 2.0, // speed for fallback ink blob movement def: 2.0
-    'mixEdgeMin': 0.01, // minimum edge mix for ink to background def: 0.01
-    'mixEdgeMax': 0.1, // maximum edge mix for ink to background def: 0.1
+    'mixEdgeMin': 0.005, // minimum edge mix for ink to background def: 0.01
+    'mixEdgeMax': 0.2, // maximum edge mix for ink to background def: 0.1
     'idMixRadius': 0,    // 1..2 px works well
     'idMixSoftness': 0.9 // lower = more sensitive seam blending
 }
@@ -697,7 +697,8 @@ const image_frag = `
     if (!m || m.type !== 'splat') return;
 
     // ensure tracked entry exists and allocate a free index (1..MAX_BODIES-1)
-    if (!trackedEntities[m.id]) {
+    if (!trackedEntities[m.id] && (m.id === bodyPartsIndex['left_hand'] ||
+        m.id === bodyPartsIndex['right_hand'])) {
       // use incoming id directly as shader index (0-based)
       if (m.id < 0 || m.id >= MAX_BODIES) {
         console.warn('Incoming id out of range:', m.id);
@@ -725,7 +726,6 @@ const image_frag = `
     }
 
     const entity = trackedEntities[m.id];
-    entity.lastSeen = Date.now();
 
     // convert arena coords -> normalized screen pixels (same mapping as before)
     const arena_x = 3000, arena_y = 3000;
@@ -735,30 +735,62 @@ const image_frag = `
     const screenX = norm_x * window.innerWidth * pr;
     const screenY = (1.0 - norm_y) * window.innerHeight * pr;
 
-    // set immediate position to avoid jump if previously unset
-    if (entity.iMouseTarget.z === 0 && entity.iMouseTarget.w === 0) {
-      entity.iMouse.x = screenX;
-      entity.iMouse.y = screenY;
+    if (m.id === bodyPartsIndex['left_hand'] || m.id === bodyPartsIndex['right_hand']) {
+        entity.lastSeen = Date.now();
+
+        // set immediate position to avoid jump if previously unset
+        if (entity.iMouseTarget.z === 0 && entity.iMouseTarget.w === 0) {
+          entity.iMouse.x = screenX;
+          entity.iMouse.y = screenY;
+        }
+
+        // update target (z/w used as >0 active flag)
+        entity.iMouseTarget.x = screenX;
+        entity.iMouseTarget.y = screenY;
+        entity.iMouseTarget.z = screenX;
+        entity.iMouseTarget.w = screenY;
+
     }
 
-    // update target (z/w used as >0 active flag)
-    entity.iMouseTarget.x = screenX;
-    entity.iMouseTarget.y = screenY;
-    entity.iMouseTarget.z = screenX;
-    entity.iMouseTarget.w = screenY;
-
-    // Pattern 1: change global splat size based on x position (use inside handler)
+    const minZHand = 200, maxZHand = 2000;
+    const minZFoot = 0, maxZFoot = 1500;
+    const minScale = 0.1, maxScale = 0.2;
+    const minFalloff = 1.0, maxFalloff = 1.1;
+    const maxBlobSize = 0.1; const minBlobSize = 0.01;
+    const minMixEdgeMax = 0.1; const maxMixEdgeMax = 0.8;
     const normX = Math.abs(m.x / 3000); // arena x range assumed -3000..+3000
-    entity.config.blobSize = 0.02 + normX * 0.2; // blob size 0.02..0.22
+    const normY = Math.abs(m.y / 3000); // arena y range assumed -3000..+3000
+    const normZHand = Math.min(Math.max((m.z - minZHand) / (maxZHand - minZHand), 0.0), 1.0);
+    const normZFoot = Math.min(Math.max((m.z - minZFoot) / (maxZFoot - minZFoot), 0.0), 1.0);
+
+    // Changing hand blob size according to depth, disappearing above threshold
+    let blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
+    if (m.z >= maxZHand) {
+      blobSize = 0.0;
+    } else {
+      blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
+    }
+
+    // mixEdgeMax adjustment based on depth of left foot
+    let edgeMaxValueFoot = maxMixEdgeMax - (minMixEdgeMax + (maxMixEdgeMax - minMixEdgeMax) * (1.0 - normZFoot));
+    if (m.z < minZFoot) {
+        edgeMaxValueFoot = 0.1;
+    }
 
     //console.log(`Entity ${m.id} at (${m.x.toFixed(1)}, ${m.y.toFixed(1)}) -> screen (${screenX.toFixed(1)}, ${screenY.toFixed(1)}), blobSize: ${entity.config.blobSize.toFixed(3)}`);
     // Pattern 2: per-entity tint using trackedEntities.config (scale/mutate entity config here)
     if (m.id === bodyPartsIndex['left_hand']) {
-      entity.config.inkBase = [0.0, (1.0-normX)*0.1, 0.0];   // pure red
-//      entity.config.inkTint = [0.0, (1.0-normX)*0.2, 0.0];
+        entity.config.inkBase = [0.0, (1.0-normX)*0.1, 0.0];   // deep green
+        entity.config.blobSize = blobSize;
     } else if (m.id === bodyPartsIndex['right_hand']) {
-      entity.config.inkBase = [normX*0.2, 0.0, 0.0];   // pure green
-//      entity.config.inkTint = [normX*0.5, 0.0, 0.0];
+        entity.config.inkBase = [(1.0-normY)*0.1, 0.0, 0.0];  //deep red
+        entity.config.blobSize = blobSize;
+    } else if (m.id === bodyPartsIndex['left_foot']) {
+        trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
+        updateConfig(updates = {'mixEdgeMax': edgeMaxValueFoot});
+    } else {
+      // any other entity is deleted (not tracked)
+      trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
     }
     // push per-entity values into shader uniforms
     syncPerEntityUniforms();
