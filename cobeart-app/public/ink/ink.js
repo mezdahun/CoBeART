@@ -63,6 +63,7 @@ function syncPerEntityUniforms() {
   const falloffDefault = CONFIG.falloff;
   const specDefault = CONFIG.specularStrength;
   const normalDivDefault = CONFIG.normalDivider;
+  const mixEdgeMaxDefault = CONFIG.mixEdgeMax;
 
   const getEntityByIndex = (idx) => {
     for (const id in trackedEntities) {
@@ -99,6 +100,7 @@ function syncPerEntityUniforms() {
   const specArr = new Float32Array(MAX_BODIES);
   const normalDivArr = new Float32Array(MAX_BODIES);
   const blobArr = new Float32Array(MAX_BODIES);
+  const mixEdgeMaxArr = new Float32Array(MAX_BODIES);
 
   for (let i = 0; i < MAX_BODIES; i++) {
     const ent = getEntityByIndex(i);
@@ -110,6 +112,7 @@ function syncPerEntityUniforms() {
     specArr[i] = ent && ent.config && (ent.config.specularStrength !== undefined) ? ent.config.specularStrength : specDefault;
     normalDivArr[i] = ent && ent.config && (ent.config.normalDivider !== undefined) ? ent.config.normalDivider : normalDivDefault;
     blobArr[i] = ent && ent.config && (ent.config.blobSize !== undefined) ? ent.config.blobSize : blobDefault;
+    mixEdgeMaxArr[i] = ent && ent.config && (ent.config.mixEdgeMax !== undefined) ? ent.config.mixEdgeMax : mixEdgeMaxDefault;
   }
 
   if (buf && buf.uniforms.uBlobSizeArray) buf.uniforms.uBlobSizeArray.value = blobArr;
@@ -118,11 +121,11 @@ function syncPerEntityUniforms() {
   if (buf && buf.uniforms.uScaleArray) buf.uniforms.uScaleArray.value = scaleArr;
   if (buf && buf.uniforms.uFalloffArray) buf.uniforms.uFalloffArray.value = falloffArr;
   if (buf && buf.uniforms.uNormalDividerArray) buf.uniforms.uNormalDividerArray.value = normalDivArr;
-
   if (img && img.uniforms.uBlobSizeArray) img.uniforms.uBlobSizeArray.value = blobArr;
   if (img && img.uniforms.uRange2Array) img.uniforms.uRange2Array.value = range2Arr;
   if (img && img.uniforms.uSpecularStrengthArray) img.uniforms.uSpecularStrengthArray.value = specArr;
   if (img && img.uniforms.uNormalDividerArray) img.uniforms.uNormalDividerArray.value = normalDivArr;
+  if (img && img.uniforms.uMixEdgeMaxArray) img.uniforms.uMixEdgeMaxArray.value = mixEdgeMaxArr;
 
   if (buf) buf.needsUpdate = true;
   if (img) img.needsUpdate = true;
@@ -498,6 +501,7 @@ const image_frag = `
   uniform float uRange2Array[${MAX_BODIES}];
   uniform float uSpecularStrengthArray[${MAX_BODIES}];
   uniform float uNormalDividerArray[${MAX_BODIES}];
+  uniform float uMixEdgeMaxArray[${MAX_BODIES}];
 
   // new: seam smoothing controls
   uniform float uIdMixRadius;   // in pixels (e.g., 1.0 - 2.0)
@@ -538,6 +542,7 @@ const image_frag = `
     float pickedRange2    = mix(uRange2Array[i0],             uRange2Array[i1],             t);
     float pickedSpec      = mix(uSpecularStrengthArray[i0],   uSpecularStrengthArray[i1],   t);
     float pickedNormalDiv = mix(uNormalDividerArray[i0],      uNormalDividerArray[i1],      t);
+    float pickedMixEdgeMax= mix(uMixEdgeMaxArray[i0],         uMixEdgeMaxArray[i1],         t);
 
     // shading (unchanged, but uses blended params)
     vec3 dither = texture2D(iChannel1, gl_FragCoord.xy/uBlueNoiseScale).rgb;
@@ -563,7 +568,7 @@ const image_frag = `
     color -= dither.x * uDitherStrength;
     vec3 bg = uBackground;
     bg *= smoothstep(1.5, -0.5, length(uv - 0.5));
-    color = mix(bg, clamp(color, 0.0, 1.0), smoothstep(uMixEdgeMin, uMixEdgeMax, gray));
+    color = mix(bg, clamp(color, 0.0, 1.0), smoothstep(uMixEdgeMin, pickedMixEdgeMax, gray));
     gl_FragColor = vec4(color, 1.0);
   }
 `;
@@ -627,7 +632,8 @@ const image_frag = `
         uSpecularStrengthArray: { value: new Float32Array(MAX_BODIES).fill(CONFIG.specularStrength) },
         uNormalDividerArray: { value: new Float32Array(MAX_BODIES).fill(CONFIG.normalDivider) },
         uIdMixRadius: { value: CONFIG.idMixRadius },
-        uIdMixSoftness: { value: CONFIG.idMixSoftness }
+        uIdMixSoftness: { value: CONFIG.idMixSoftness },
+        uMixEdgeMaxArray: { value: new Float32Array(MAX_BODIES).fill(CONFIG.mixEdgeMax) }
       },
       vertexShader: vert,
       fragmentShader: image_frag
@@ -744,58 +750,61 @@ const image_frag = `
         entity.iMouseTarget.y = screenY;
         entity.iMouseTarget.z = screenX;
         entity.iMouseTarget.w = screenY;
-
     }
 
-    const minZHand = 200, maxZHand = 2000;
+
     const minZFoot = 0, maxZFoot = 1500;
+    const minZHand = 600, maxZHand = 2000;
     const minScale = 0.1, maxScale = 0.2;
-    const minFalloff = 1.0, maxFalloff = 1.1;
-    const maxBlobSize = 0.1; const minBlobSize = 0.01;
-    const minMixEdgeMax = 0.1; const maxMixEdgeMax = 0.8;
+    const minFalloff = 1.3, maxFalloff = 1.1;
+    const maxBlobSize = 0.1; const minBlobSize = 0.03;
+    const minSpecularStrength = 0.2; const maxSpecularStrength = 0.5;
+    const minMixEdgeMax = 0.2; const maxMixEdgeMax = 0.5;
     const normX = Math.abs(m.x / 3000); // arena x range assumed -3000..+3000
     const normY = Math.abs(m.y / 3000); // arena y range assumed -3000..+3000
-    const normZHand = Math.min(Math.max((m.z - minZHand) / (maxZHand - minZHand), 0.0), 1.0);
+    var normZHandLeft, normZHandRight;
+    if (leftHandBefore[2] !== null && rightHandBefore[2] !== null) {
+        normZHandLeft = Math.min(Math.max((leftHandBefore[2] - minZHand) / (maxZHand - minZHand), 0.0), 1.0);
+        normZHandRight = Math.min(Math.max((rightHandBefore[2] - minZHand) / (maxZHand - minZHand), 0.0), 1.0);
+        if (normZHandLeft > 1.0) { normZHandLeft = 1.0; }
+        if (normZHandRight > 1.0) { normZHandRight = 1.0; }
+    } else {
+        normZHandLeft = 0.0;
+        normZHandRight = 0.0;
+    }
     const normZFoot = Math.min(Math.max((m.z - minZFoot) / (maxZFoot - minZFoot), 0.0), 1.0);
 
-    // Changing hand blob size according to depth, disappearing above threshold
-    let blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
-    if (m.z >= maxZHand) {
-      blobSize = 0.0;
-    } else {
-      blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
-    }
+    let edgeMaxValueHand = CONFIG.mixEdgeMax;
+    let specularStrengthValueHand = CONFIG.specularStrength;
 
-    // mixEdgeMax adjustment based on hand velocity ( to add popping edge effect with fast movements
-    // calculating absolute velocity of left and right hands from memory
-    if (leftHandBefore[0] !== null) {
-        var leftHandVel = Math.sqrt(Math.pow(leftHandBefore[3], 2) +
-                                    Math.pow(leftHandBefore[4], 2) +
-                                    Math.pow(leftHandBefore[5], 2));
-    } else {
-        var leftHandVel = 0;
-    }
-
-    if (rightHandBefore[0] !== null) {
-        var rightHandVel = Math.sqrt(Math.pow(rightHandBefore[3], 2) +
-                                     Math.pow(rightHandBefore[4], 2) +
-                                     Math.pow(rightHandBefore[5], 2));
-    } else {
-        var rightHandVel = 0;
-    }
-
-//    if (m.z < minZFoot) {
-//        edgeMaxValueFoot = 0.1;
+//    // Changing hand blob size according to depth, disappearing above threshold
+//    let blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
+//    if (m.z >= maxZHand) {
+//      blobSize = 0.0;
+//      edgeMaxValueHand = minMixEdgeMax;
+//      specularStrengthValueHand = minSpecularStrength;
+//    } else {
+//      blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
+//      edgeMaxValueHand = normZHand * (maxMixEdgeMax - minMixEdgeMax) + minMixEdgeMax;
+//      specularStrengthValueHand = normZHand * (maxSpecularStrength - minSpecularStrength) + minSpecularStrength;
 //    }
 
     //console.log(`Entity ${m.id} at (${m.x.toFixed(1)}, ${m.y.toFixed(1)}) -> screen (${screenX.toFixed(1)}, ${screenY.toFixed(1)}), blobSize: ${entity.config.blobSize.toFixed(3)}`);
     // Pattern 2: per-entity tint using trackedEntities.config (scale/mutate entity config here)
     if (m.id === bodyPartsIndex['left_hand']) {
-        entity.config.inkBase = [0.0, (1.0-normX)*0.1, 0.0];   // deep green
-        entity.config.blobSize = blobSize;
+        let intensityFactor = (1.0 - normZHandLeft) * 0.4;
+        entity.config.inkBase = [intensityFactor, 0, 0];   // deep green
+        entity.config.blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHandLeft);
+        entity.config.specularStrength = (1-normZHandLeft) * (maxSpecularStrength - minSpecularStrength) + minSpecularStrength;
+        normZHandLeft = Math.min(normZHandLeft, 0.99);
+        entity.config.mixEdgeMax = (1-normZHandLeft) * (maxMixEdgeMax - minMixEdgeMax) + minMixEdgeMax;
     } else if (m.id === bodyPartsIndex['right_hand']) {
-        entity.config.inkBase = [(1.0-normY)*0.1, 0.0, 0.0];  //deep red
-        entity.config.blobSize = blobSize;
+        let intensityFactor = (normZHandRight) * 0.4;
+        entity.config.inkBase = [intensityFactor, 0, 0];  //deep red
+        entity.config.blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHandRight);
+        entity.config.specularStrength = (1-normZHandRight) * (maxSpecularStrength - minSpecularStrength) + minSpecularStrength;
+        normZHandRight = Math.min(normZHandRight, 0.99);
+        entity.config.mixEdgeMax = (1-normZHandRight) * (maxMixEdgeMax - minMixEdgeMax) + minMixEdgeMax;
     } else if (m.id === bodyPartsIndex['left_foot']) {
         trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
         //updateConfig(updates = {'mixEdgeMax': edgeMaxValueFoot});
@@ -803,6 +812,12 @@ const image_frag = `
       // any other entity is deleted (not tracked)
       trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
     }
+    // average hand height
+    //normZHandBoth = Math.min((normZHandLeft + normZHandRight) / 2.0, 0.99);
+    //console.log("NORMZH", normZHandBoth);
+    //edgeMaxValueHand = maxMixEdgeMax - (normZHandBoth * (maxMixEdgeMax - minMixEdgeMax) + minMixEdgeMax);
+    //updating config
+    //updateConfig(updates = { 'mixEdgeMax': edgeMaxValueHand });
     // push per-entity values into shader uniforms
     syncPerEntityUniforms();
 
