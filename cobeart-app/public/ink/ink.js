@@ -221,6 +221,12 @@ let CONFIG = {
     'idMixSoftness': 0.9 // lower = more sensitive seam blending
 }
 
+let leftHandBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, vz
+let rightHandBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, vz
+let headBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, vz
+let leftFootBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, vz
+let rightFootBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, vz
+
 
 init();
 animate();
@@ -414,17 +420,6 @@ void main(){
       }
     }
   }
-
-//  // Fallback motion
-//  if (!any) {
-//    float t = iTime * uFallBackSpeed;
-//    vec2 fbPos = vec2(cos(t) * uFallBackRadius, sin(t * 1.3) * uFallBackRadius);
-//    vec2 luv = uvC - fbPos;
-//    vec3 spice = fbmSlot(vec3(luv * (uScale * 0.8), iTime * uSpeed), uFalloff);
-//    vec2 fbOffset = vec2(cos(spice.x * 6.283), sin(spice.x * 6.283)) * (uBlobSize * 0.03);
-//    bestPaint = max(bestPaint, trace(length(luv + fbOffset), uFallBackRadius));
-//    bestIdNorm = 0.5 / float(${MAX_BODIES});
-//  }
 
   // Previous frame advection
   vec2 uv = gl_FragCoord.xy / iResolution.xy;
@@ -771,11 +766,27 @@ const image_frag = `
       blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
     }
 
-    // mixEdgeMax adjustment based on depth of left foot
-    let edgeMaxValueFoot = maxMixEdgeMax - (minMixEdgeMax + (maxMixEdgeMax - minMixEdgeMax) * (1.0 - normZFoot));
-    if (m.z < minZFoot) {
-        edgeMaxValueFoot = 0.1;
+    // mixEdgeMax adjustment based on hand velocity ( to add popping edge effect with fast movements
+    // calculating absolute velocity of left and right hands from memory
+    if (leftHandBefore[0] !== null) {
+        var leftHandVel = Math.sqrt(Math.pow(leftHandBefore[3], 2) +
+                                    Math.pow(leftHandBefore[4], 2) +
+                                    Math.pow(leftHandBefore[5], 2));
+    } else {
+        var leftHandVel = 0;
     }
+
+    if (rightHandBefore[0] !== null) {
+        var rightHandVel = Math.sqrt(Math.pow(rightHandBefore[3], 2) +
+                                     Math.pow(rightHandBefore[4], 2) +
+                                     Math.pow(rightHandBefore[5], 2));
+    } else {
+        var rightHandVel = 0;
+    }
+
+//    if (m.z < minZFoot) {
+//        edgeMaxValueFoot = 0.1;
+//    }
 
     //console.log(`Entity ${m.id} at (${m.x.toFixed(1)}, ${m.y.toFixed(1)}) -> screen (${screenX.toFixed(1)}, ${screenY.toFixed(1)}), blobSize: ${entity.config.blobSize.toFixed(3)}`);
     // Pattern 2: per-entity tint using trackedEntities.config (scale/mutate entity config here)
@@ -787,13 +798,21 @@ const image_frag = `
         entity.config.blobSize = blobSize;
     } else if (m.id === bodyPartsIndex['left_foot']) {
         trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
-        updateConfig(updates = {'mixEdgeMax': edgeMaxValueFoot});
+        //updateConfig(updates = {'mixEdgeMax': edgeMaxValueFoot});
     } else {
       // any other entity is deleted (not tracked)
       trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
     }
     // push per-entity values into shader uniforms
     syncPerEntityUniforms();
+
+    // filling up memory
+    leftHandBefore = m.id === bodyPartsIndex['left_hand'] ? [m.x, m.y, m.z, m.vx, m.vy, m.vz] : leftHandBefore;
+    rightHandBefore = m.id === bodyPartsIndex['right_hand'] ? [m.x, m.y, m.z, m.vx, m.vy, m.vz] : rightHandBefore;
+    leftFootBefore = m.id === bodyPartsIndex['left_foot'] ? [m.x, m.y, m.z, m.vx, m.vy, m.vz] : leftFootBefore;
+    rightFootBefore = m.id === bodyPartsIndex['right_foot'] ? [m.x, m.y, m.z, m.vx, m.vy, m.vz] : rightFootBefore;
+    headBefore = m.id === bodyPartsIndex['head'] ? [m.x, m.y, m.z, m.vx, m.vy, m.vz] : headBefore;
+
   });
 
   window.addEventListener('resize', onResize);
