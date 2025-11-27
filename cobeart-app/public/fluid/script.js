@@ -2218,27 +2218,32 @@ window.addEventListener('keydown', e => {
                 (leftHandBefore[2] - rightHandBefore[2]) ** 2
             );
 
-            // if conditions meet we increment the trigger counter
-            if (distanceToHeadLeft < headProximityThreshold &&
-                handsDistance > handDistanceThreshold &&
-                leftHandVelBefore.length === 3 &&
-                rightHandVelBefore.length === 3 &&
-                Math.abs(leftHandVelBefore[0]) < velTh &&
-                Math.abs(leftHandVelBefore[1]) < velTh &&
-                Math.abs(leftHandVelBefore[2]) < velTh) {
-                triggerCounter += 1;
-//                    console.log("PATTERN9 Trigger counter: ", triggerCounter);
-            }
+            if (worldName !== "Zephyr") {
+                // if conditions meet we increment the trigger counter
+                if (distanceToHeadLeft < headProximityThreshold &&
+                    handsDistance > handDistanceThreshold &&
+                    leftHandVelBefore.length === 3 &&
+                    rightHandVelBefore.length === 3 &&
+                    Math.abs(leftHandVelBefore[0]) < velTh &&
+                    Math.abs(leftHandVelBefore[1]) < velTh &&
+                    Math.abs(leftHandVelBefore[2]) < velTh) {
+                    triggerCounter += 1;
+    //                    console.log("PATTERN9 Trigger counter: ", triggerCounter);
+                }
 
-            if (distanceToHeadRight < headProximityThreshold &&
-                handsDistance > handDistanceThreshold &&
-                leftHandVelBefore.length === 3 &&
-                rightHandVelBefore.length === 3 &&
-                Math.abs(rightHandVelBefore[0]) < velTh &&
-                Math.abs(rightHandVelBefore[1]) < velTh &&
-                Math.abs(rightHandVelBefore[2]) < velTh) {
-                triggerOffCounter += 1;
-//                    console.log("PATTERN9 Trigger OFF counter: ", triggerCounter);
+                if (distanceToHeadRight < headProximityThreshold &&
+                    handsDistance > handDistanceThreshold &&
+                    leftHandVelBefore.length === 3 &&
+                    rightHandVelBefore.length === 3 &&
+                    Math.abs(rightHandVelBefore[0]) < velTh &&
+                    Math.abs(rightHandVelBefore[1]) < velTh &&
+                    Math.abs(rightHandVelBefore[2]) < velTh) {
+                    triggerOffCounter += 1;
+    //                    console.log("PATTERN9 Trigger OFF counter: ", triggerCounter);
+                }
+            } else {
+                // in Zephyr world head tilt color mode is always active
+                headTiltColorMode = true;
             }
 
             //PATTERN 12 trigger
@@ -2259,40 +2264,6 @@ window.addEventListener('keydown', e => {
             handsOn = !handsOn;
             handsOnTriggerCounter = 0;
             timeWhenLastTriggerHandsOn = Date.now();
-            // if handsOn we add hand ids to tracked bodyparts and remove feet if they are in there
-//            if (handsOn) {
-//                if (!trackedBodyParts.includes(bodyPartsIndex['left_hand'])) {
-//                    trackedBodyParts.push(bodyPartsIndex['left_hand']);
-//                }
-//                if (!trackedBodyParts.includes(bodyPartsIndex['right_hand'])) {
-//                    trackedBodyParts.push(bodyPartsIndex['right_hand']);
-//                }
-////                // remove feet if in trackedBodyParts
-////                const leftFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_foot']);
-////                if (leftFootIndex > -1) {
-////                    trackedBodyParts.splice(leftFootIndex, 1);
-////                }
-////                const rightFootIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_foot']);
-////                if (rightFootIndex > -1) {
-////                    trackedBodyParts.splice(rightFootIndex, 1);
-////                }
-//            } else {
-//               //removing hands, adding feet to be tracked
-//                const leftHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['left_hand']);
-//                if (leftHandIndex > -1) {
-//                    trackedBodyParts.splice(leftHandIndex, 1);
-//                }
-//                const rightHandIndex = trackedBodyParts.indexOf(bodyPartsIndex['right_hand']);
-//                if (rightHandIndex > -1) {
-//                    trackedBodyParts.splice(rightHandIndex, 1);
-//                }
-////                if (!trackedBodyParts.includes(bodyPartsIndex['left_foot'])) {
-////                    trackedBodyParts.push(bodyPartsIndex['left_foot']);
-////                }
-////                if (!trackedBodyParts.includes(bodyPartsIndex['right_foot'])) {
-////                    trackedBodyParts.push(bodyPartsIndex['right_foot']);
-////                }
-//            }
 
             for (let i = 0; i < 20; i++) {
                     //console.log("PATTERN9 Creating swirl splats to signal activation");
@@ -2523,7 +2494,7 @@ window.addEventListener('keydown', e => {
             }
         }
 
-
+        //Pattern 9 color change
         // Change color according to head tilt if mode is activated
         if (headTiltColorMode && m.id === bodyPartsIndex['head']) {
             let pitch = m.roll; // in degrees, positive when leaning forward
@@ -2534,16 +2505,28 @@ window.addEventListener('keydown', e => {
             if (pitch < minPitch) pitch = minPitch;
             if (pitch > maxPitch) pitch = maxPitch;
             const pitchNorm = (pitch - minPitch) / (maxPitch - minPitch);
-            let minHue = 360 * pitchNorm; // from 0 to 360
-            let maxHue = minHue + 120; // span of 300 degrees
-            // generating palette of 100 colors between minHue and maxHue
-            colorPalette.length = 0;
-            for (let i = 0; i <= 99; i++) {
-                const hue = minHue - (i / 99) * (minHue - maxHue);
-                const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
-                colorPalette.push(rgb);
+            if (worldName !== "Zephyr") {
+                let minHue = 360 * pitchNorm; // from 0 to 360
+                let maxHue = minHue + 120; // span of 300 degrees
+                // generating palette of 100 colors between minHue and maxHue
+                colorPalette.length = 0;
+                for (let i = 0; i <= 99; i++) {
+                    const hue = minHue - (i / 99) * (minHue - maxHue);
+                    const rgb = HSVtoRGB((hue + 360) % 360 / 360, 1.0, 1.0);
+                    colorPalette.push(rgb);
+                }
+                console.log("Head raw pitch: ", rawPitch, "clamped: ", pitch, " setting color palette hues between: ", minHue, "-", maxHue);
+            } else {
+                // in Zephyr world the default color palette is 100 colors smoothly changing between selected target colors
+                // to keep matching color shceme with head tilt, we shift this palette according to pitch
+                const shiftAmount = Math.floor(pitchNorm * colorPalette.length); // number of positions to shift
+                colorPalette = defaultColorPalette.slice(); // reset to default
+                for (let i = 0; i < shiftAmount; i++) {
+                    const firstColor = colorPalette.shift();
+                    colorPalette.push(firstColor);  //shift left by one position
+                }
+                console.log("PATTERN9 ZEP Head raw pitch: ", rawPitch, "clamped: ", pitch, " shifting color palette by ", shiftAmount, " positions.");
             }
-            console.log("Head raw pitch: ", rawPitch, "clamped: ", pitch, " setting color palette hues between: ", minHue, "-", maxHue);
         }
 
         // set back to default palette if mode is not activated
