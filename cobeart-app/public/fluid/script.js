@@ -1760,30 +1760,30 @@ window.addEventListener('keydown', e => {
     let defaultColorPalette = [];
     let minHue = 60; // yellow
     let maxHue = -60; // purple
-    if (worldName === "Zddedephyr") {
-      let yellow = HSVtoRGB(60 / 360, 1.0, 1.0);
-      let blue = HSVtoRGB(240 / 360, 1.0, 1.0);
-      let beige = HSVtoRGB(30 / 360, 0.3, 1.0);
-      let white = HSVtoRGB(0 / 360, 0.0, 1.0);
-      let cyan = HSVtoRGB(180 / 360, 1.0, 1.0);
-      let turquise = HSVtoRGB(174 / 360, 0.72, 1.0);
-
-      let baseColors = [yellow, blue, beige, cyan, turquise];
-      let segments = baseColors.length - 1;
-
-      for (let s = 0; s < segments; s++) {
-        let startColor = baseColors[s];
-        let endColor = baseColors[s + 1];
-
-        for (let i = 0; i < 20; i++) {
-          let t = i / 19;
-          let r = startColor[0] + t * (endColor[0] - startColor[0]);
-          let g = startColor[1] + t * (endColor[1] - startColor[1]);
-          let b = startColor[2] + t * (endColor[2] - startColor[2]);
-          colorPalette.push({ 'r': r, 'g': g, 'b': b } );
-          defaultColorPalette.push({ 'r': r, 'g': g, 'b': b } );
+    if (worldName === "Zephyr") {
+        //for the Zephyr world we generate a smooth color palette of 100 colors  using a set of anchor colors
+        let orange = {r: 0.25, g: 0.125, b: 0.0}; // Adjusted to match target brightness
+        let brown = {r: 0.2, g: 0.1, b: 0.0}; // Adjusted to match target brightness
+        let aquamarine = {r: 0.05, g: 0.125, b: 0.075}; // Adjusted to match target brightness
+        let babyblue = {r: 0.1, g: 0.15, b: 0.25}; // Adjusted to match target brightness
+        let golden = {r: 0.24, g: 0.21, b: 0.17}; // Adjusted to match target brightness
+        let silver = {r: 0.1, g: 0.1, b: 0.1}; // Adjusted to match target brightness
+        let anchorColors = [aquamarine, babyblue, silver, golden, brown, orange];
+        // we loop through between anchor colors and generate 20 colors between each pair
+        for (let j = 0; j < anchorColors.length - 1; j++) {
+            const startColor = anchorColors[j];
+            const endColor = anchorColors[j + 1];
+            for (let i = 0; i < 20; i++) {
+                const t = i / 19;
+                const r = startColor.r + t * (endColor.r - startColor.r);
+                const g = startColor.g + t * (endColor.g - startColor.g);
+                const b = startColor.b + t * (endColor.b - startColor.b);
+                const rgb = {r: r, g: g, b: b};
+                console.log("Generated color RGB: ", rgb);
+                colorPalette.push(rgb);
+                defaultColorPalette.push(rgb);
+            }
         }
-      }
     } else {
     for (let i = 0; i <= 99; i++) {
         const hue = minHue - (i / 99) * (minHue - maxHue);
@@ -1905,24 +1905,27 @@ window.addEventListener('keydown', e => {
             }
         }
 
-        // PATTERN 2: Bloom kick: set bloom according to the highest foot's z coord
-        const posZ = m.z;
-        const maxBloomZ = 1500; // z at which bloom is maximum
-        const maxBloomValue = 0.15; // maximum bloom intensity
-        const lowerZThreshold = 1000; // z below which no bloom is applied and from which smooth change of bloom is applied
-        if ((m.id === bodyPartsIndex['right_foot'] && posZ > leftFootZBefore) ||
-            (m.id === bodyPartsIndex['left_foot'] && posZ > rightFootZBefore)
-        ) {
-            if (typeof posZ === 'number') {
-                if (posZ > lowerZThreshold) {
-                    const z = posZ <= lowerZThreshold ? 0 : Math.min((posZ - lowerZThreshold) / (maxBloomZ - lowerZThreshold), 1) * maxBloomValue;
-                    config.BLOOM_INTENSITY = z * maxBloomValue;
-                } else {
-                    config.BLOOM_INTENSITY = 0.0;
-                }
-            }
-            //console.log("Setting BLOOM_INTENSITY to ", config.BLOOM_INTENSITY);
-        }
+//        // PATTERN 2: Bloom kick: set bloom according to the highest foot's z coord
+//        const posZ = m.z;
+//        const maxBloomZ = 1500; // z at which bloom is maximum
+//        const maxBloomValue = 0.15; // maximum bloom intensity
+//        const lowerZThreshold = 200; // z below which no bloom is applied and from which smooth change of bloom is applied
+//        // Bloom kick should be only active if fallExplosion is not started or already finished
+//        if (!fallExplosionStarted || fallExplosionFinished) {
+//            if ((m.id === bodyPartsIndex['right_foot'] && posZ > leftFootZBefore) ||
+//                (m.id === bodyPartsIndex['left_foot'] && posZ > rightFootZBefore)
+//            ) {
+//                if (typeof posZ === 'number') {
+//                    if (posZ > lowerZThreshold) {
+//                        const z = posZ <= lowerZThreshold ? 0 : Math.min((posZ - lowerZThreshold) / (maxBloomZ - lowerZThreshold), 1) * maxBloomValue;
+//                        config.BLOOM_INTENSITY = z * maxBloomValue;
+//                    } else {
+//                        config.BLOOM_INTENSITY = 0.0;
+//                    }
+//                }
+//                //console.log("Setting BLOOM_INTENSITY to ", config.BLOOM_INTENSITY);
+//            }
+//        }
 
         // PATTERN 10: Using objects, e.g. if m.id in stick, rope or object
         // First we check if any of the objects are closer to the right hand than 200, if so, we turn on tracking for them
