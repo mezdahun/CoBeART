@@ -1,7 +1,7 @@
 // ink.js — THREE.js rewrite (mirrors molten.js structure)
 
 // ---- config / state (kept from original ink) --------------------------------
-const MAX_BODIES = 10;
+const MAX_BODIES = 15;
 const STATIONARY_VELOCITY_THRESHOLD = 50;
 const STATIONARY_TIMEOUT = 200;
 const MOUSE_SMOOTHING = 0.2;
@@ -9,6 +9,8 @@ const MOUSE_SMOOTHING = 0.2;
 let trackedEntities = {};
 let iMouseArray = Array.from({length: MAX_BODIES}, () => new THREE.Vector4(0,0,0,0));
 let iMouseTarget = new THREE.Vector4();
+let isSHeld = false; // Tracks if "s" is held
+let isFHeld = false; // Tracks if "f" is held
 
 function cleanupEntities() {
   const now = Date.now();
@@ -196,17 +198,17 @@ let frame = 0;
 
 let targetA1, targetA2;               // ping-pong for Buffer A
 let volumeNoiseTex, blueNoiseTex;     // iChannel0 / iChannel1 for our shaders
-
+let falloffValue = 1.0;
 // Creating animation parameters config
 let CONFIG = {
-    'blobSize': 0.015, // size of ink blobs
+    'blobSize': 0.1, // size of ink blobs
     'fade': 0.55, // fade speed, if large, fades faster
     'strength': 1.0,  // flicker and grain strength
     'range1': 5.0,  // ink tail spread width
     'range2': 3.0,  // ink lighting normal spread (color depth)
     'speed': 0.1, // speed of noise evolution, spice (wiggliness/inkspread noise)
     'scale': 0.1, // tail spread noise scale
-    'falloff': 1.0, // spread fluidity and turbulence
+    'falloff': falloffValue, // spread fluidity and turbulence
     'inkBase': [0.15, 0.0, 0.0],    // base ink color
     'ambientWeight': 0.8,  // ambient/base ink weight (how much the ink resembles base color)
     'inkTint': [3.0, 3.0, 3.0],    // color of the ghost around ink tail
@@ -229,6 +231,8 @@ let rightHandBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, v
 let headBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, vz
 let leftFootBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, vz
 let rightFootBefore = [null, null, null, null, null, null]; //x, y, z, vx, vy, vz
+let leftHandAbsVelBefore = 0;   // ADD THIS
+let rightHandAbsVelBefore = 0;  // ADD THIS
 
 
 init();
@@ -669,6 +673,50 @@ const image_frag = `
   document.addEventListener('mouseup', ()=>{
     iMouseTarget.set(0,0,0,0);
   });
+  // Add keydown listener
+  document.addEventListener('keydown', (event) => {
+      if (event.key === 's') {
+          isSHeld = true; // Set "s" as held
+      } else if (event.key === "f") {
+          isFHeld = true; // Set "f" as held
+      }
+
+      if (isSHeld) {
+          if (event.key === 'ArrowUp') {
+              CONFIG.scale = Math.min(CONFIG.scale + 0.01, 1.0); // Increase scale, cap at 1.0
+              console.log("KEY Increased scale to ", CONFIG.scale);
+              updateConfig(updates={'scale': CONFIG.scale}); // Update visualization
+              syncPerEntityUniforms(); // This pushes the updated arrays to shaders
+          } else if (event.key === 'ArrowLeft') {
+              CONFIG.scale = Math.max(CONFIG.scale - 0.01, 0.0); // Decrease scale, cap at 0.0
+              console.log("KEY Decreased scale to ", CONFIG.scale);
+              updateConfig(updates={'scale': CONFIG.scale}); // Update visualization
+              syncPerEntityUniforms(); // This pushes the updated arrays to shaders
+          }
+      }
+      if (isFHeld) {
+          if (event.key === 'ArrowUp') {
+              CONFIG.falloff = Math.min(CONFIG.falloff + 0.01, 2.0); // Increase scale, cap at 1.0
+              console.log("KEY Increased falloff to ", CONFIG.falloff);
+              updateConfig(updates={'falloff': CONFIG.falloff}); // Update visualization
+              syncPerEntityUniforms(); // This pushes the updated arrays to shaders
+          } else if (event.key === 'ArrowLeft') {
+              CONFIG.falloff = Math.min(CONFIG.falloff - 0.01, 2.0); // Increase scale, cap at 1.0
+              console.log("KEY Increased falloff to ", CONFIG.falloff);
+              updateConfig(updates={'falloff': CONFIG.falloff}); // Update visualization
+              syncPerEntityUniforms(); // This pushes the updated arrays to shaders
+          }
+      }
+  });
+
+  // Add keyup listener
+  document.addEventListener('keyup', (event) => {
+      if (event.key === 's') {
+          isSHeld = false; // Reset "s" as not held
+      } else if (event.key === 'f') {
+          isFHeld = false; // Reset "f" as not held
+      }
+  });
 
   let bodyPartsIndex = {};
   // reading common body parts map from json
@@ -692,6 +740,113 @@ const image_frag = `
         console.error('Failed to load body_map.json:', error);
     });
 
+  // Base pattern with 2 complementary circulating blobs
+  let baseSpeedCircle = 1.2;  // Rotation speed (radians per second)
+  let baseRadiusCircle1 = 0.9;  // Radius as fraction of arena size (0.25 = 750 units)
+  let baseRadiusCircle2 = 0.9;  // Radius as fraction of arena size (0.25 = 750 units)
+  let baseColorCircle1 = {r:0.8, g:0.2, b:0.2};  // Bright red
+  let baseColorCircle2 = {r:0.2, g:0.2, b:0.8};  // Bright blue
+  let circleEnabled = false;
+  let circle1ID = MAX_BODIES - 4;  // Slot 6
+  let circle2ID = MAX_BODIES - 3;  // Slot 7 (avoid slot 9 which is mouse)
+  let circleBlobSize1 = 0.08;
+  let circleBlobSize2 = 0.08;
+
+  // Helper function to convert arena coordinates to screen coordinates
+  function arenaToScreen(arenaX, arenaY) {
+    const ARENA_SIZE = 3000;
+    const pr = window.devicePixelRatio || 1;
+    // Arena center (0,0) maps to screen center
+    // Arena range: -3000 to +3000 maps to screen 0 to width/height
+    const norm_x = (-arenaX + ARENA_SIZE) / (2 * ARENA_SIZE);
+    const norm_y = (arenaY + ARENA_SIZE) / (2 * ARENA_SIZE);
+    const screenX = norm_x * window.innerWidth * pr;
+    const screenY = (1.0 - norm_y) * window.innerHeight * pr;
+    return {x: screenX, y: screenY};
+  }
+
+  // Initialize circle entities once
+  function initCircleEntity(id, color) {
+    if (!trackedEntities[id]) {
+      trackedEntities[id] = {
+        id: id,
+        index: id,
+        iMouse: new THREE.Vector4(0, 0, 0, 0),
+        iMouseTarget: new THREE.Vector4(0, 0, 0, 0),
+        lastSeen: Date.now(),
+        config: {
+          fade: 0.3,  // Slower fade for persistent trails
+          range1: CONFIG.range1,
+          range2: CONFIG.range2,
+          scale: CONFIG.scale,
+          falloff: CONFIG.falloff,
+          inkBase: [color.r, color.g, color.b],
+          inkTint: [color.r, color.g, color.b],
+          specularStrength: CONFIG.specularStrength,
+          normalDivider: CONFIG.normalDivider,
+          blobSize: 0.08,  // Larger blob for visibility
+          mixEdgeMax: 0.3
+        }
+      };
+    }
+  }
+
+  // Initialize both circles
+  initCircleEntity(circle1ID, baseColorCircle1);
+  initCircleEntity(circle2ID, baseColorCircle2);
+
+  // Update circle positions in animation loop
+  setInterval(() => {
+    const time = Date.now() * 0.001;  // Current time in seconds
+    const ARENA_SIZE = 3000;
+    const circleRadius1 = baseRadiusCircle1 * ARENA_SIZE;  // Radius in arena units
+    const circleRadius2 = baseRadiusCircle2 * ARENA_SIZE;  // Radius in arena units
+
+    // Calculate angles for both circles (circle2 is opposite circle1)
+    const angle1 = time * baseSpeedCircle;
+    const angle2 = angle1 + Math.PI;
+
+    // Calculate arena coordinates (center is 0,0)
+    const arenaX1 = Math.cos(angle1) * circleRadius1;
+    const arenaY1 = Math.sin(angle1) * circleRadius1;
+    const arenaX2 = Math.cos(angle2) * circleRadius2;
+    const arenaY2 = Math.sin(angle2) * circleRadius2;
+
+    // Convert to screen coordinates
+    const screen1 = arenaToScreen(arenaX1, arenaY1);
+    const screen2 = arenaToScreen(arenaX2, arenaY2);
+
+    // Update circle 1
+    if (trackedEntities[circle1ID]) {
+      trackedEntities[circle1ID].lastSeen = Date.now();
+      trackedEntities[circle1ID].iMouseTarget.x = screen1.x;
+      trackedEntities[circle1ID].iMouseTarget.y = screen1.y;
+      trackedEntities[circle1ID].iMouseTarget.z = circleEnabled ? screen1.x : 0;  // Active flag (>0 = active)
+      trackedEntities[circle1ID].iMouseTarget.w = circleEnabled ? screen1.y : 0;
+      // Set blob size based on circleEnabled state
+      trackedEntities[circle1ID].config.blobSize = circleEnabled ? circleBlobSize1 : 0.0;
+    }
+
+    // Update circle 2
+    if (trackedEntities[circle2ID]) {
+      trackedEntities[circle2ID].lastSeen = Date.now();
+      trackedEntities[circle2ID].iMouseTarget.x = screen2.x;
+      trackedEntities[circle2ID].iMouseTarget.y = screen2.y;
+      trackedEntities[circle2ID].iMouseTarget.z = circleEnabled ? screen2.x : 0;  // Active flag (>0 = active)
+      trackedEntities[circle2ID].iMouseTarget.w = circleEnabled ? screen2.y : 0;
+      // Set blob size based on circleEnabled state
+      trackedEntities[circle2ID].config.blobSize = circleEnabled ? circleBlobSize2 : 0.0;
+    }
+  }, 50);  // Update every 50ms for smooth animation
+
+
+  let fallRefractoryPeriod = 2000;
+  let lastFallTime = Date.now();
+  let handEnabled = true;
+  let followEnabled = false;  // can be activated with scissor movement where hands are moving away from each other and left hamd is ending above head
+  let followedEnabledVelocityThreshold = 3000;
+  let followedEnabledHandDistanceThreshold = 800;
+  let handsWereAboveThreshold = false;  // Track if hands were previously elevated
   // receive messages from common bridge
   window.addEventListener('message', (e) => {
     const m = e.data;
@@ -721,7 +876,8 @@ const image_frag = `
           inkTint: [...CONFIG.inkTint],
           specularStrength: CONFIG.specularStrength,
           normalDivider: CONFIG.normalDivider,
-          blobSize: CONFIG.blobSize
+          blobSize: CONFIG.blobSize,
+          mixEdgeMax: CONFIG.mixEdgeMax
         }
       };
     }
@@ -753,15 +909,31 @@ const image_frag = `
     }
 
 
-    const minZFoot = 0, maxZFoot = 1500;
-    const minZHand = 600, maxZHand = 2000;
-    const minScale = 0.1, maxScale = 0.2;
-    const minFalloff = 1.3, maxFalloff = 1.1;
-    const maxBlobSize = 0.1; const minBlobSize = 0.03;
+    // Dynamic parameters
+    // Source blob size
+    const maxBlobSize = 0.2; const minBlobSize = 0.0;
+    // Glossiness (light intensity)
     const minSpecularStrength = 0.2; const maxSpecularStrength = 0.5;
-    const minMixEdgeMax = 0.2; const maxMixEdgeMax = 0.5;
+    // Edge mix to background (smooth to rugged with RGB ghost)
+    const minMixEdgeMax = 0.2; const maxMixEdgeMax = 0.4;
+    // Trail smoothness
+    const minScale = 0.02; const maxScale = 0.4;
+    // Falloff: tail wiggliness/vibration (Changed to vibration when on the ground)
+    const vibratingFalloff = 0.04, defaultFalloff = CONFIG.falloff;
+    const vibratingBlobSize = 0.3; const defaultBlobSize = maxBlobSize;
+
+    // Initialization
+    let edgeMaxValueHand = CONFIG.mixEdgeMax;
+    let specularStrengthValueHand = CONFIG.specularStrength;
+
+    // Tracking limits of feet and hands, tresholds
+    const fallVibrationThreshold = 200; // hands below this height cause vibration when feet also on floor
+    const minZFoot = 0, maxZFoot = 1500;
+    const minZHand = fallVibrationThreshold, maxZHand = 2800;
+
     const normX = Math.abs(m.x / 3000); // arena x range assumed -3000..+3000
     const normY = Math.abs(m.y / 3000); // arena y range assumed -3000..+3000
+
     var normZHandLeft, normZHandRight;
     if (leftHandBefore[2] !== null && rightHandBefore[2] !== null) {
         normZHandLeft = Math.min(Math.max((leftHandBefore[2] - minZHand) / (maxZHand - minZHand), 0.0), 1.0);
@@ -774,51 +946,152 @@ const image_frag = `
     }
     const normZFoot = Math.min(Math.max((m.z - minZFoot) / (maxZFoot - minZFoot), 0.0), 1.0);
 
-    let edgeMaxValueHand = CONFIG.mixEdgeMax;
-    let specularStrengthValueHand = CONFIG.specularStrength;
+    let normSpeedLeft = 0.0;
+    let zVelMax = 23000; // max vertical speed for normalization
+    let cutOffSpeed = 4000; // speed below which vibration is not activated
 
-//    // Changing hand blob size according to depth, disappearing above threshold
-//    let blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
-//    if (m.z >= maxZHand) {
-//      blobSize = 0.0;
-//      edgeMaxValueHand = minMixEdgeMax;
-//      specularStrengthValueHand = minSpecularStrength;
-//    } else {
-//      blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHand);
-//      edgeMaxValueHand = normZHand * (maxMixEdgeMax - minMixEdgeMax) + minMixEdgeMax;
-//      specularStrengthValueHand = normZHand * (maxSpecularStrength - minSpecularStrength) + minSpecularStrength;
-//    }
-
-    //console.log(`Entity ${m.id} at (${m.x.toFixed(1)}, ${m.y.toFixed(1)}) -> screen (${screenX.toFixed(1)}, ${screenY.toFixed(1)}), blobSize: ${entity.config.blobSize.toFixed(3)}`);
-    // Pattern 2: per-entity tint using trackedEntities.config (scale/mutate entity config here)
-    if (m.id === bodyPartsIndex['left_hand']) {
-        let intensityFactor = (1.0 - normZHandLeft) * 0.4;
-        entity.config.inkBase = [intensityFactor, 0, 0];   // deep green
-        entity.config.blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHandLeft);
-        entity.config.specularStrength = (1-normZHandLeft) * (maxSpecularStrength - minSpecularStrength) + minSpecularStrength;
+    //Basic behavior when no special moves are activated, up and down movements are tracked but not followed continuously
+    if (handEnabled && !followEnabled) {
+        if (m.id === bodyPartsIndex['left_hand']) {
+            normZHandLeft = Math.min(normZHandLeft, 0.99);
+            let normZVelLeft = 0.0;
+            if (Math.abs(m.vz) > cutOffSpeed &&
+                m.vz < 0) { // only consider downward movement for left hand
+                normZVelLeft = Math.abs(m.vz) / zVelMax;
+            }
+            //normalizing between 0 and 1
+            normZVelLeft = Math.min(Math.max(normZVelLeft, 0.0), 1.0);
+            let intensityFactor = (1.0 - normZHandLeft) * 0.4;
+            entity.config.inkBase = [(1-intensityFactor), 0, 0];   // deep green
+            entity.config.blobSize = (maxBlobSize - minBlobSize) * (normZVelLeft);
+            entity.config.mixEdgeMax = maxMixEdgeMax;
+            entity.config.fade = 0.55; // keep the splat there longer
+        } else if (m.id === bodyPartsIndex['right_hand']) {
+            normZHandRight = Math.min(normZHandRight, 0.99);
+            let normZVelRight = 0.0;
+            if (Math.abs(m.vz) > cutOffSpeed &&
+                m.vz < 0) { // only consider downward movement for right hand
+                normZVelRight = Math.abs(m.vz) / zVelMax;
+            }
+            normZVelRight = Math.min(Math.max(normZVelRight, 0.0), 1.0);
+            let intensityFactor = (normZHandRight) * 0.4;
+            entity.config.inkBase = [intensityFactor, 0, 0];  //deep red
+            entity.config.blobSize = (maxBlobSize - minBlobSize) * (normZVelRight);
+            entity.config.mixEdgeMax = maxMixEdgeMax;
+            entity.config.fade = 0.55; // keep the splat there longer
+      } else if (m.id === bodyPartsIndex['left_foot']) {
+          trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
+          //updateConfig(updates = {'mixEdgeMax': edgeMaxValueFoot});
+      } else if (m.id === circle1ID || m.id === circle2ID) {
+        // any other entity is deleted (not tracked)
+        trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
+      }
+    } else if (handEnabled && followEnabled) {
+      // not only hands are tracked but they are followed with smooth ink splat stream con
+      if (m.id === bodyPartsIndex['left_hand']) {
         normZHandLeft = Math.min(normZHandLeft, 0.99);
-        entity.config.mixEdgeMax = (1-normZHandLeft) * (maxMixEdgeMax - minMixEdgeMax) + minMixEdgeMax;
-    } else if (m.id === bodyPartsIndex['right_hand']) {
+        let intensityFactor = (normZHandLeft) * 0.4;
+        entity.config.inkBase = [(1-intensityFactor), 0, 0];  //deep red
+        entity.config.blobSize = (maxBlobSize - minBlobSize) * (1-normZHandLeft);
+        entity.config.mixEdgeMax = maxMixEdgeMax;
+        entity.config.fade = 0.55; // keep the splat there longer
+      } else if (m.id === bodyPartsIndex['right_hand']) {
+        normZHandRight = Math.min(normZHandRight, 0.99);
         let intensityFactor = (normZHandRight) * 0.4;
         entity.config.inkBase = [intensityFactor, 0, 0];  //deep red
-        entity.config.blobSize = minBlobSize + (maxBlobSize - minBlobSize) * (1.0 - normZHandRight);
-        entity.config.specularStrength = (1-normZHandRight) * (maxSpecularStrength - minSpecularStrength) + minSpecularStrength;
-        normZHandRight = Math.min(normZHandRight, 0.99);
-        entity.config.mixEdgeMax = (1-normZHandRight) * (maxMixEdgeMax - minMixEdgeMax) + minMixEdgeMax;
-    } else if (m.id === bodyPartsIndex['left_foot']) {
+        entity.config.blobSize = (maxBlobSize - minBlobSize) * (1-normZHandRight);
+        entity.config.mixEdgeMax = maxMixEdgeMax;
+        entity.config.fade = 0.55; // keep the splat there longer  
+      }
+    } else if (!handEnabled) {
+      //removing hands, as they are not tracked anymore, but changing circling parameters according to hand and foot movement
+      if (m.id === bodyPartsIndex['left_hand']) {
         trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
-        //updateConfig(updates = {'mixEdgeMax': edgeMaxValueFoot});
-    } else {
-      // any other entity is deleted (not tracked)
-      trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
+      } else if (m.id === bodyPartsIndex['right_hand']) {
+        trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
+      }
+      // changing circle radius according to hand movement (velocity)
+      if (m.id === bodyPartsIndex['left_hand']) {
+        // Scale from 0.5 (slow movement) to 0.9 (fast movement)
+        const normVel = m.normVel || 0.0;
+        baseRadiusCircle1 = 0.5 + (0.9 - 0.5) * (1-normZHandLeft);
+        // scale speed between 1.2 and 2.4
+        baseSpeedCircle1 = 1.2 + (2.4 - 1.2) * (1-normZHandLeft);
+      } else if (m.id === bodyPartsIndex['right_hand']) {
+        // Scale from 0.6 (slow movement) to 0.9 (fast movement)
+        const normVel = m.normVel || 0.0;
+        baseRadiusCircle2 = 0.5 + (0.9 - 0.5) * (1-normZHandRight);
+        // scale speed between 1.2 and 2.4
+        baseSpeedCircle2 = 1.2 + (2.4 - 1.2) * (1-normZHandRight);
+      }
     }
-    // average hand height
-    //normZHandBoth = Math.min((normZHandLeft + normZHandRight) / 2.0, 0.99);
-    //console.log("NORMZH", normZHandBoth);
-    //edgeMaxValueHand = maxMixEdgeMax - (normZHandBoth * (maxMixEdgeMax - minMixEdgeMax) + minMixEdgeMax);
-    //updating config
-    //updateConfig(updates = { 'mixEdgeMax': edgeMaxValueHand });
-    // push per-entity values into shader uniforms
+
+    // Track if hands are currently above threshold
+    if (leftHandBefore[2] !== null && rightHandBefore[2] !== null) {
+      const handsCurrentlyAbove = (leftHandBefore[2] >= fallVibrationThreshold && 
+                                   rightHandBefore[2] >= fallVibrationThreshold);
+      
+      if (handsCurrentlyAbove) {
+        // Hands are elevated - set the flag
+        handsWereAboveThreshold = true;
+      }
+    }
+    
+    // Hero circle activated when fall detected (transition from above to below threshold)
+    if (leftHandBefore[2] !== null && rightHandBefore[2] !== null &&
+        leftHandBefore[2] < fallVibrationThreshold && rightHandBefore[2] < fallVibrationThreshold &&
+        leftFootBefore[2] !== null && rightFootBefore[2] !== null &&
+        leftFootBefore[2] < fallVibrationThreshold && rightFootBefore[2] < fallVibrationThreshold) {
+          
+          // Only trigger if hands were previously above threshold (actual fall event)
+          if (handsWereAboveThreshold && Date.now() - lastFallTime > fallRefractoryPeriod) {
+            lastFallTime = Date.now();
+            handsWereAboveThreshold = false;  // Reset the flag
+            //turn on/off global circles
+            circleEnabled = !circleEnabled;
+            handEnabled = !handEnabled;
+          }
+        }
+    
+    // activating hand following, in this case not only up and down movements are tracked but splats follow hands
+    let distanceBetweenHands = Math.sqrt(
+        (leftHandBefore[0] - rightHandBefore[0]) ** 2 +
+        (leftHandBefore[1] - rightHandBefore[1]) ** 2 +
+        (leftHandBefore[2] - rightHandBefore[2]) ** 2
+    );
+    let leftHandVelocity = leftHandAbsVelBefore;
+    let rightHandVelocity = rightHandAbsVelBefore;
+    if (leftHandBefore[2] !== null && rightHandBefore[2] !== null && headBefore[2] !== null &&
+        distanceBetweenHands > followedEnabledHandDistanceThreshold &&
+        leftHandBefore[2] > headBefore[2] &&
+        leftHandVelocity > followedEnabledVelocityThreshold &&
+        rightHandVelocity > followedEnabledVelocityThreshold) {
+        followEnabled = true;
+    } else if (leftHandBefore[2] !== null && rightHandBefore[2] !== null && headBefore[2] !== null &&
+        distanceBetweenHands > followedEnabledHandDistanceThreshold &&
+        rightHandBefore[2] > headBefore[2] &&
+        leftHandVelocity < followedEnabledVelocityThreshold &&
+        rightHandVelocity < followedEnabledVelocityThreshold) {
+        followEnabled = false;
+    }        
+    
+    // Circle blob sizes are now managed in the setInterval above
+    // Hand blob sizes are managed through the entity config below or set to 0 when disabled
+    if (!handEnabled) {
+      if (trackedEntities[bodyPartsIndex['left_hand']]) {
+        trackedEntities[bodyPartsIndex['left_hand']].config.blobSize = 0.0;
+      }
+      if (trackedEntities[bodyPartsIndex['right_hand']]) {
+        trackedEntities[bodyPartsIndex['right_hand']].config.blobSize = 0.0;
+      }
+    }
+
+    //Stop drawing entity if it is above depth treshold
+    if ((m.id === bodyPartsIndex['left_hand'] && m.z > maxZHand) ||
+        (m.id === bodyPartsIndex['right_hand'] && m.z > maxZHand)) {
+        entity.config.blobSize = 0.0;
+    }
+
     syncPerEntityUniforms();
 
     // filling up memory
@@ -827,6 +1100,8 @@ const image_frag = `
     leftFootBefore = m.id === bodyPartsIndex['left_foot'] ? [m.x, m.y, m.z, m.vx, m.vy, m.vz] : leftFootBefore;
     rightFootBefore = m.id === bodyPartsIndex['right_foot'] ? [m.x, m.y, m.z, m.vx, m.vy, m.vz] : rightFootBefore;
     headBefore = m.id === bodyPartsIndex['head'] ? [m.x, m.y, m.z, m.vx, m.vy, m.vz] : headBefore;
+    leftHandAbsVelBefore = m.id === bodyPartsIndex['left_hand'] ? m.absVel : leftHandAbsVelBefore;
+    rightHandAbsVelBefore = m.id === bodyPartsIndex['right_hand'] ? m.absVel : rightHandAbsVelBefore;
 
   });
 
