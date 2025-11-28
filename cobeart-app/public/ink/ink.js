@@ -744,8 +744,8 @@ const image_frag = `
   let baseSpeedCircle = 1.2;  // Rotation speed (radians per second)
   let baseRadiusCircle1 = 0.9;  // Radius as fraction of arena size (0.25 = 750 units)
   let baseRadiusCircle2 = 0.9;  // Radius as fraction of arena size (0.25 = 750 units)
-  let baseColorCircle1 = {r:0.8, g:0.2, b:0.2};  // Bright red
-  let baseColorCircle2 = {r:0.2, g:0.2, b:0.8};  // Bright blue
+  let baseColorCircle1 = {r:0.01, g:0.01, b:0.01};  // BLACK - FIXED, never changes
+  let baseColorCircle2 = {r:0.01, g:0.01, b:0.01};  // BLACK - FIXED, never changes
   let circleEnabled = false;
   let circle1ID = MAX_BODIES - 4;  // Slot 6
   let circle2ID = MAX_BODIES - 3;  // Slot 7 (avoid slot 9 which is mouse)
@@ -781,7 +781,7 @@ const image_frag = `
           scale: CONFIG.scale,
           falloff: CONFIG.falloff,
           inkBase: [color.r, color.g, color.b],
-          inkTint: [color.r, color.g, color.b],
+          inkTint: [2.0, 2.0, 2.0],  // Neutral tint (will be updated dynamically)
           specularStrength: CONFIG.specularStrength,
           normalDivider: CONFIG.normalDivider,
           blobSize: 0.08,  // Larger blob for visibility
@@ -794,6 +794,14 @@ const image_frag = `
   // Initialize both circles
   initCircleEntity(circle1ID, baseColorCircle1);
   initCircleEntity(circle2ID, baseColorCircle2);
+  
+  // FORCE RESET both circles to BLACK immediately (override any cached colors)
+  if (trackedEntities[circle1ID]) {
+    trackedEntities[circle1ID].config.inkBase = [0.01, 0.01, 0.01];
+  }
+  if (trackedEntities[circle2ID]) {
+    trackedEntities[circle2ID].config.inkBase = [0.01, 0.01, 0.01];
+  }
 
   // Update circle positions in animation loop
   setInterval(() => {
@@ -825,6 +833,15 @@ const image_frag = `
       trackedEntities[circle1ID].iMouseTarget.w = circleEnabled ? screen1.y : 0;
       // Set blob size based on circleEnabled state
       trackedEntities[circle1ID].config.blobSize = circleEnabled ? circleBlobSize1 : 0.0;
+      // Reset fade when disabled so residual ink fades away
+      if (!circleEnabled) {
+        trackedEntities[circle1ID].config.fade = 1.0;
+      } else if (circleEnabled && trackedEntities[circle1ID].config.fade === undefined) {
+        // Ensure fade has a default value when circles are enabled
+        trackedEntities[circle1ID].config.fade = 0.3;
+      }
+      // Force circle 1 to BLACK ALWAYS - NEVER change this
+      trackedEntities[circle1ID].config.inkBase = [0.01, 0.01, 0.01]; // BLACK
     }
 
     // Update circle 2
@@ -836,6 +853,15 @@ const image_frag = `
       trackedEntities[circle2ID].iMouseTarget.w = circleEnabled ? screen2.y : 0;
       // Set blob size based on circleEnabled state
       trackedEntities[circle2ID].config.blobSize = circleEnabled ? circleBlobSize2 : 0.0;
+      // Reset fade when disabled so residual ink fades away
+      if (!circleEnabled) {
+        trackedEntities[circle2ID].config.fade = 1.0;
+      } else if (circleEnabled && trackedEntities[circle2ID].config.fade === undefined) {
+        // Ensure fade has a default value when circles are enabled
+        trackedEntities[circle2ID].config.fade = 0.3;
+      }
+      // Force circle 2 to BLACK ALWAYS - NEVER change this
+      trackedEntities[circle2ID].config.inkBase = [0.01, 0.01, 0.01]; // BLACK
     }
   }, 50);  // Update every 50ms for smooth animation
 
@@ -844,7 +870,7 @@ const image_frag = `
   let lastFallTime = Date.now();
   let handEnabled = true;
   let followEnabled = false;  // can be activated with scissor movement where hands are moving away from each other and left hamd is ending above head
-  let followedEnabledVelocityThreshold = 3000;
+  let followedEnabledVelocityThreshold = 6000;
   let followedEnabledHandDistanceThreshold = 800;
   let handsWereAboveThreshold = false;  // Track if hands were previously elevated
   // receive messages from common bridge
@@ -961,11 +987,18 @@ const image_frag = `
             }
             //normalizing between 0 and 1
             normZVelLeft = Math.min(Math.max(normZVelLeft, 0.0), 1.0);
-            let intensityFactor = (1.0 - normZHandLeft) * 0.4;
-            entity.config.inkBase = [(1-intensityFactor), 0, 0];   // deep green
+            // Almost black with subtle spatial warmth (reduced variation)
+            const spatialR = 0.02 + normX * 0.015; // 0.02 to 0.035
+            const spatialG = 0.02 + normY * 0.015;
+            const spatialB = 0.02 + (1.0 - normX) * 0.01;
+            entity.config.inkBase = [spatialR, spatialG, spatialB];
             entity.config.blobSize = (maxBlobSize - minBlobSize) * (normZVelLeft);
-            entity.config.mixEdgeMax = maxMixEdgeMax;
-            entity.config.fade = 0.55; // keep the splat there longer
+            entity.config.fade = (1-normZVelLeft) * 0.7; // fast hits persist, slow fades quickly
+            // Electric glow on fast hits - intensified
+            const tintIntensity = 0.5 + normZVelLeft * 4.5; // 0.5 to 5.0
+            entity.config.inkTint = [tintIntensity, tintIntensity, tintIntensity];
+            // Spread halo more on fast hits
+            entity.config.mixEdgeMax = minMixEdgeMax + normZVelLeft * (0.6 - minMixEdgeMax); // grows with speed
         } else if (m.id === bodyPartsIndex['right_hand']) {
             normZHandRight = Math.min(normZHandRight, 0.99);
             let normZVelRight = 0.0;
@@ -974,11 +1007,19 @@ const image_frag = `
                 normZVelRight = Math.abs(m.vz) / zVelMax;
             }
             normZVelRight = Math.min(Math.max(normZVelRight, 0.0), 1.0);
-            let intensityFactor = (normZHandRight) * 0.4;
-            entity.config.inkBase = [intensityFactor, 0, 0];  //deep red
+            // Dark blood red with spatial depth - velocity adds intensity (reduced variation)
+            const baseIntensity = 0.15 + normZVelRight * 0.2; // 0.15 to 0.35
+            const spatialR = baseIntensity + normX * 0.04; // subtle spatial variation
+            const spatialG = 0.0 + (1.0 - normY) * 0.02; // subtle warmth
+            const spatialB = 0.02 + normY * 0.03; // subtle depth
+            entity.config.inkBase = [spatialR, spatialG, spatialB];
             entity.config.blobSize = (maxBlobSize - minBlobSize) * (normZVelRight);
-            entity.config.mixEdgeMax = maxMixEdgeMax;
-            entity.config.fade = 0.55; // keep the splat there longer
+            entity.config.fade = (1-normZVelRight) * 0.7; // fast hits persist, slow fades quickly
+            // Electric glow on fast hits - intensified
+            const tintIntensity = 0.5 + normZVelRight * 4.5; // 0.5 to 5.0
+            entity.config.inkTint = [tintIntensity, tintIntensity, tintIntensity];
+            // Spread halo more on fast hits
+            entity.config.mixEdgeMax = minMixEdgeMax + normZVelRight * (0.6 - minMixEdgeMax); // grows with speed
       } else if (m.id === bodyPartsIndex['left_foot']) {
           trackedBodyParts = trackedBodyParts.filter(id => id !== m.id);
           //updateConfig(updates = {'mixEdgeMax': edgeMaxValueFoot});
@@ -990,18 +1031,36 @@ const image_frag = `
       // not only hands are tracked but they are followed with smooth ink splat stream con
       if (m.id === bodyPartsIndex['left_hand']) {
         normZHandLeft = Math.min(normZHandLeft, 0.99);
-        let intensityFactor = (normZHandLeft) * 0.4;
-        entity.config.inkBase = [(1-intensityFactor), 0, 0];  //deep red
+        // Left hand: Blue→Black gradient with x position - height adds intensity
+        const baseIntensity = (1.0 - normZHandLeft) * 0.12; // 0.0 to 0.12
+        const blueToBlack = (1.0 - normX); // More blue when normX low, black when high
+        const spatialR = 0.01 + normX * 0.015;
+        const spatialG = 0.02 + normX * 0.01;
+        const spatialB = 0.08 + baseIntensity * blueToBlack; // blue fades to black across arena
+        entity.config.inkBase = [spatialR, spatialG, spatialB];
         entity.config.blobSize = (maxBlobSize - minBlobSize) * (1-normZHandLeft);
-        entity.config.mixEdgeMax = maxMixEdgeMax;
-        entity.config.fade = 0.55; // keep the splat there longer
+        entity.config.fade = normZHandLeft * 0.8; // high hands fade fast, low hands persist
+        // Ethereal glow when high, grounded when low - intensified
+        const tintIntensity = 1.0 + (1.0 - normZHandLeft) * 4.0; // 1.0 to 5.0
+        entity.config.inkTint = [tintIntensity, tintIntensity, tintIntensity];
+        // Ethereal halo when high, sharp when low
+        entity.config.mixEdgeMax = minMixEdgeMax + (1.0 - normZHandLeft) * (0.7 - minMixEdgeMax); // high hands = big halo
       } else if (m.id === bodyPartsIndex['right_hand']) {
         normZHandRight = Math.min(normZHandRight, 0.99);
-        let intensityFactor = (normZHandRight) * 0.4;
-        entity.config.inkBase = [intensityFactor, 0, 0];  //deep red
+        // Right hand: Black→Blue gradient with x position (complement to left) - height adds intensity
+        const baseIntensity = (1.0 - normZHandRight) * 0.12; // 0.0 to 0.12
+        const blackToBlue = normX; // More black when normX low, blue when high
+        const spatialR = 0.01 + (1.0 - normX) * 0.015;
+        const spatialG = 0.02 + (1.0 - normX) * 0.01;
+        const spatialB = 0.08 + baseIntensity * blackToBlue; // black transforms to blue across arena
+        entity.config.inkBase = [spatialR, spatialG, spatialB];
         entity.config.blobSize = (maxBlobSize - minBlobSize) * (1-normZHandRight);
-        entity.config.mixEdgeMax = maxMixEdgeMax;
-        entity.config.fade = 0.55; // keep the splat there longer  
+        entity.config.fade = normZHandRight * 0.8; // high hands fade fast, low hands persist
+        // Ethereal glow when high, grounded when low - intensified
+        const tintIntensity = 1.0 + (1.0 - normZHandRight) * 4.0; // 1.0 to 5.0
+        entity.config.inkTint = [tintIntensity, tintIntensity, tintIntensity];
+        // Ethereal halo when high, sharp when low
+        entity.config.mixEdgeMax = minMixEdgeMax + (1.0 - normZHandRight) * (0.7 - minMixEdgeMax); // high hands = big halo  
       }
     } else if (!handEnabled) {
       //removing hands, as they are not tracked anymore, but changing circling parameters according to hand and foot movement
@@ -1017,12 +1076,32 @@ const image_frag = `
         baseRadiusCircle1 = 0.5 + (0.9 - 0.5) * (1-normZHandLeft);
         // scale speed between 1.2 and 2.4
         baseSpeedCircle1 = 1.2 + (2.4 - 1.2) * (1-normZHandLeft);
+        // control circle 1 fade: high hands = persistent, low hands = faster fade
+        if (trackedEntities[circle1ID]) {
+          trackedEntities[circle1ID].config.fade = normZHandLeft * 0.6;
+          // Hypnotic glow when high, more solid when low - intensified
+          const tintIntensity = 1.5 + (1.0 - normZHandLeft) * 4.5; // 1.5 to 6.0
+          //trackedEntities[circle1ID].config.inkTint = [tintIntensity, tintIntensity, tintIntensity];
+          // Big diffuse halo when high, sharper when low
+          trackedEntities[circle1ID].config.mixEdgeMax = 0.2 + (1.0 - normZHandLeft) * 0.6; // 0.2 to 0.8
+          // COLOR IS FIXED TO BLACK IN setInterval - DO NOT CHANGE HERE
+        }
       } else if (m.id === bodyPartsIndex['right_hand']) {
         // Scale from 0.6 (slow movement) to 0.9 (fast movement)
         const normVel = m.normVel || 0.0;
         baseRadiusCircle2 = 0.5 + (0.9 - 0.5) * (1-normZHandRight);
         // scale speed between 1.2 and 2.4
         baseSpeedCircle2 = 1.2 + (2.4 - 1.2) * (1-normZHandRight);
+        // control circle 2 fade: high hands = persistent, low hands = faster fade
+        if (trackedEntities[circle2ID]) {
+          trackedEntities[circle2ID].config.fade = normZHandRight * 0.6;
+          // Hypnotic glow when high, more solid when low - intensified
+          const tintIntensity = 1.5 + (1.0 - normZHandRight) * 4.5; // 1.5 to 6.0
+          //trackedEntities[circle2ID].config.inkTint = [tintIntensity, tintIntensity, tintIntensity];
+          // Big diffuse halo when high, sharper when low
+          trackedEntities[circle2ID].config.mixEdgeMax = 0.2 + (1.0 - normZHandRight) * 0.6; // 0.2 to 0.8
+          // COLOR IS FIXED TO BLACK IN setInterval - DO NOT CHANGE HERE
+        }
       }
     }
 
@@ -1080,9 +1159,13 @@ const image_frag = `
     if (!handEnabled) {
       if (trackedEntities[bodyPartsIndex['left_hand']]) {
         trackedEntities[bodyPartsIndex['left_hand']].config.blobSize = 0.0;
+        // Reset fade so residual ink fades away when switching to circle mode
+        trackedEntities[bodyPartsIndex['left_hand']].config.fade = 1.0;
       }
       if (trackedEntities[bodyPartsIndex['right_hand']]) {
         trackedEntities[bodyPartsIndex['right_hand']].config.blobSize = 0.0;
+        // Reset fade so residual ink fades away when switching to circle mode
+        trackedEntities[bodyPartsIndex['right_hand']].config.fade = 1.0;
       }
     }
 
