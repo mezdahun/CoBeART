@@ -749,8 +749,8 @@ const image_frag = `
   let circleEnabled = false;
   let circle1ID = MAX_BODIES - 4;  // Slot 6
   let circle2ID = MAX_BODIES - 3;  // Slot 7 (avoid slot 9 which is mouse)
-  let circleBlobSize1 = 0.08;
-  let circleBlobSize2 = 0.08;
+  let circleBlobSize1 = 0.06;
+  let circleBlobSize2 = 0.06;
 
   // Helper function to convert arena coordinates to screen coordinates
   function arenaToScreen(arenaX, arenaY) {
@@ -972,6 +972,30 @@ const image_frag = `
     }
     const normZFoot = Math.min(Math.max((m.z - minZFoot) / (maxZFoot - minZFoot), 0.0), 1.0);
 
+    // Dynamic background based on CURRENT foot height (real-time)
+    if (m.id === bodyPartsIndex['left_foot'] || m.id === bodyPartsIndex['right_foot']) {
+      // Get current z for the foot that just updated, and previous z for the other foot
+      let leftFootZ = m.id === bodyPartsIndex['left_foot'] ? m.z : (leftFootBefore[2] || 0);
+      let rightFootZ = m.id === bodyPartsIndex['right_foot'] ? m.z : (rightFootBefore[2] || 0);
+      
+      // Calculate average foot height using current data
+      let avgFootHeight = ((leftFootZ + rightFootZ) / 2);
+      avgFootHeight = Math.min(Math.max((avgFootHeight - minZFoot) / (maxZFoot - minZFoot), 0.0), 1.0);
+      
+      // Dark techno aesthetic: Deep black when feet on floor, subtle lift when feet raised
+      const darkBg = [0.8, 0.8, 0.8];      // Almost black (feet on floor)
+      const lightBg = [3.2, 3.2, 3.2];     // Subtle lift (feet raised)
+      
+      const newBackground = [
+        darkBg[0] + avgFootHeight * (lightBg[0] - darkBg[0]),
+        darkBg[1] + avgFootHeight * (lightBg[1] - darkBg[1]),
+        darkBg[2] + avgFootHeight * (lightBg[2] - darkBg[2])
+      ];
+      
+      // Apply to shader using updateConfig
+      updateConfig({background: newBackground});
+    }
+
     let normSpeedLeft = 0.0;
     let zVelMax = 23000; // max vertical speed for normalization
     let cutOffSpeed = 4000; // speed below which vibration is not activated
@@ -1073,7 +1097,7 @@ const image_frag = `
       if (m.id === bodyPartsIndex['left_hand']) {
         // Scale from 0.5 (slow movement) to 0.9 (fast movement)
         const normVel = m.normVel || 0.0;
-        baseRadiusCircle1 = 0.5 + (0.9 - 0.5) * (1-normZHandLeft);
+        baseRadiusCircle1 = 0.2 + (0.9 - 0.2) * (1-normZHandLeft);
         // scale speed between 1.2 and 2.4
         baseSpeedCircle1 = 1.2 + (2.4 - 1.2) * (1-normZHandLeft);
         // control circle 1 fade: high hands = persistent, low hands = faster fade
@@ -1089,7 +1113,7 @@ const image_frag = `
       } else if (m.id === bodyPartsIndex['right_hand']) {
         // Scale from 0.6 (slow movement) to 0.9 (fast movement)
         const normVel = m.normVel || 0.0;
-        baseRadiusCircle2 = 0.5 + (0.9 - 0.5) * (1-normZHandRight);
+        baseRadiusCircle2 = 0.2 + (0.9 - 0.2) * (1-normZHandRight);
         // scale speed between 1.2 and 2.4
         baseSpeedCircle2 = 1.2 + (2.4 - 1.2) * (1-normZHandRight);
         // control circle 2 fade: high hands = persistent, low hands = faster fade
