@@ -978,22 +978,73 @@ const image_frag = `
       let leftFootZ = m.id === bodyPartsIndex['left_foot'] ? m.z : (leftFootBefore[2] || 0);
       let rightFootZ = m.id === bodyPartsIndex['right_foot'] ? m.z : (rightFootBefore[2] || 0);
       
-      // Calculate average foot height using current data
-      let avgFootHeight = ((leftFootZ + rightFootZ) / 2);
-      avgFootHeight = Math.min(Math.max((avgFootHeight - minZFoot) / (maxZFoot - minZFoot), 0.0), 1.0);
+      // Calculate average foot height in mm
+      let avgFootHeightMM = ((leftFootZ + rightFootZ) / 2);
+      
+      // Remap background brightness to 400-1500mm range (same as border effects)
+      const minBgHeight = 250;  // Background starts changing at 400mm
+      const maxBgHeight = 1000; // Background reaches max at 1500mm
+      
+      let bgEffectIntensity = (avgFootHeightMM - minBgHeight) / (maxBgHeight - minBgHeight);
+      bgEffectIntensity = Math.min(Math.max(bgEffectIntensity, 0.0), 1.0);
       
       // Dark techno aesthetic: Deep black when feet on floor, subtle lift when feet raised
       const darkBg = [0.8, 0.8, 0.8];      // Almost black (feet on floor)
       const lightBg = [3.2, 3.2, 3.2];     // Subtle lift (feet raised)
       
       const newBackground = [
-        darkBg[0] + avgFootHeight * (lightBg[0] - darkBg[0]),
-        darkBg[1] + avgFootHeight * (lightBg[1] - darkBg[1]),
-        darkBg[2] + avgFootHeight * (lightBg[2] - darkBg[2])
+        darkBg[0] + bgEffectIntensity * (lightBg[0] - darkBg[0]),
+        darkBg[1] + bgEffectIntensity * (lightBg[1] - darkBg[1]),
+        darkBg[2] + bgEffectIntensity * (lightBg[2] - darkBg[2])
       ];
       
       // Apply to shader using updateConfig
       updateConfig({background: newBackground});
+      
+      // Update border effects based on foot height (smooth transition only between 400-1500mm)
+      const borderElement = document.querySelector('.neon-border');
+      if (borderElement) {
+        // Reuse the same remapping as background (400-1500mm range)
+        const borderEffectIntensity = bgEffectIntensity;
+        
+        // Border color: white (at 400mm) to black (at 2000mm)
+        const lowColor = { r: 255, g: 255, b: 255 };  // White
+        const highColor = { r: 0, g: 0, b: 0 };       // Black
+        
+        const r = Math.round(lowColor.r + borderEffectIntensity * (highColor.r - lowColor.r));
+        const g = Math.round(lowColor.g + borderEffectIntensity * (highColor.g - lowColor.g));
+        const b = Math.round(lowColor.b + borderEffectIntensity * (highColor.b - lowColor.b));
+        
+        borderElement.style.borderColor = `rgb(${r}, ${g}, ${b})`;
+        
+        // Frame size transformation: shrink towards center as feet lift
+        const minInset = 15;   // Wide frame (at 400mm) - original position
+        const maxInset = 300;  // Tight frame (at 2000mm) - closer to center
+        const insetAmount = minInset + borderEffectIntensity * (maxInset - minInset);
+        borderElement.style.top = `${insetAmount}px`;
+        borderElement.style.left = `${insetAmount}px`;
+        borderElement.style.right = `${insetAmount}px`;
+        borderElement.style.bottom = `${insetAmount}px`;
+        
+        // Blur expansion
+        const minBlur = 2;  // Subtle blur (at 400mm)
+        const maxBlur = 8;  // Intense glow (at 2000mm)
+        const blurAmount = minBlur + borderEffectIntensity * (maxBlur - minBlur);
+        borderElement.style.filter = `blur(${blurAmount}px)`;
+        
+        // Glow width expansion
+        const glowMultiplier = 1 + borderEffectIntensity * 2.5; // 1x to 3.5x spread
+        
+        // Box shadow (no flicker)
+        borderElement.style.boxShadow = `
+          inset 0 0 ${10 * glowMultiplier}px rgba(255, 255, 255, ${1.0 - borderEffectIntensity * 0.5}),
+          inset 0 0 ${20 * glowMultiplier}px rgba(255, 255, 255, ${0.8 - borderEffectIntensity * 0.4}),
+          inset 0 0 ${30 * glowMultiplier}px rgba(255, 255, 255, ${0.5 - borderEffectIntensity * 0.3}),
+          0 0 ${10 * glowMultiplier}px rgba(255, 255, 255, ${0.9 - borderEffectIntensity * 0.3}),
+          0 0 ${20 * glowMultiplier}px rgba(255, 255, 255, ${0.6 - borderEffectIntensity * 0.2}),
+          0 0 ${30 * glowMultiplier}px rgba(255, 255, 255, ${0.3 - borderEffectIntensity * 0.1})
+        `;
+      }
     }
 
     let normSpeedLeft = 0.0;
