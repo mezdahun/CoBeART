@@ -1224,8 +1224,8 @@ const image_frag = `
     } else if (leftHandBefore[2] !== null && rightHandBefore[2] !== null && headBefore[2] !== null &&
         distanceBetweenHands > followedEnabledHandDistanceThreshold &&
         rightHandBefore[2] > headBefore[2] &&
-        leftHandVelocity < followedEnabledVelocityThreshold &&
-        rightHandVelocity < followedEnabledVelocityThreshold) {
+        leftHandVelocity > followedEnabledVelocityThreshold &&
+        rightHandVelocity > followedEnabledVelocityThreshold) {
         followEnabled = false;
     }        
     
